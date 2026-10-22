@@ -745,13 +745,20 @@ export function installHelper(st, o) {
 }
 
 // The helper's injection: Claude's own fs, ids and clock. `presets` (name -> checked CSS) and `dir` are fixed here.
+// Claude's start time (23 Oct 2026): process.uptime() stops while the Mac sleeps, so "now minus uptime" came out late
+// by the sleep time and a later status took the live helper for a restarted Claude. Electron's own process creation
+// time is wall-clock and matches ps; the old reading stays only as a fallback.
 function helperCode(presets, dir) {
   return `(async () => {
   ${CORE}
+  const bootMs = () => {
+    try { const t = app.getAppMetrics().find((m) => m.type === 'Browser')?.creationTime; if (Number.isFinite(t) && t > 0) return Math.round(t) } catch {}
+    return Math.round(Date.now() - process.uptime() * 1000)
+  }
   const o = {
     fs: process.getBuiltinModule('fs'), dir: ${JSON.stringify(dir)},
     presets: Object.freeze(Object.assign(Object.create(null), ${JSON.stringify(presets)})),
-    uid: process.getuid(), pid: process.pid, boot: Math.round(Date.now() - process.uptime() * 1000), version: app.getVersion(), gen: ${HELPER_GEN},
+    uid: process.getuid(), pid: process.pid, boot: bootMs(), version: app.getVersion(), gen: ${HELPER_GEN},
     randomUUID: () => process.getBuiltinModule('crypto').randomUUID(), now: Date.now, app,
     digest: (s) => process.getBuiltinModule('crypto').createHash('sha256').update(s).digest('hex'),
     dark: () => ${ELECTRON}.nativeTheme.shouldUseDarkColors,

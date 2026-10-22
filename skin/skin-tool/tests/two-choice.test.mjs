@@ -412,6 +412,8 @@ test('ps: start time and binary, gone, and unsure', () => {
   const p = parsePs({ status: 0, stdout: 'Wed Oct 14 02:27:21 2026     /Applications/Claude.app/Contents/MacOS/Claude\n', stderr: '' })
   assert.equal(p.comm, CLAUDE_BINARY)
   assert.ok(Number.isFinite(p.startMs))
+  // ps runs with TZ=UTC, so its time is read as UTC on any Mac (no daylight-saving ambiguity).
+  assert.equal(parsePs({ status: 0, stdout: 'Sun Oct 25 01:30:00 2026     x\n', stderr: '' }).startMs, Date.UTC(2026, 9, 25, 1, 30))
   assert.equal(parsePs({ status: 1, stdout: '', stderr: '' }), null)
   assert.throws(() => parsePs({ status: null, stdout: '' }))
   assert.throws(() => parsePs({ status: 0, stdout: 'garbage' }))
@@ -793,7 +795,7 @@ async function claudeProc() {
   const line = ps.stdout.split('\n').find((l) => l.trim().endsWith(CLAUDE_BINARY))
   if (!line) return null
   const pid = Number(line.trim().split(/\s+/)[0])
-  return { pid, startMs: parsePs(spawnSync('/bin/ps', ['-o', 'lstart=,comm=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } })).startMs }
+  return { pid, startMs: parsePs(spawnSync('/bin/ps', ['-o', 'lstart=,comm=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } })).startMs }
 }
 async function cli(dir, ...args) {
   const { spawn } = await import('node:child_process')

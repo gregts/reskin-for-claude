@@ -717,7 +717,8 @@ export function liveSession(fs, dir, proc, { uid = process.getuid(), claudeStart
   return { state: 'active', session: v }
 }
 
-// `ps -o lstart=,comm= -p PID` -> { comm, startMs }, null when the pid is gone, throws when unsure.
+// `ps -o lstart=,comm= -p PID`, run with TZ=UTC -> { comm, startMs }, null when the pid is gone, throws when unsure.
+// UTC (23 Oct 2026): a local time is ambiguous in the hour repeated when daylight saving ends.
 export function parsePs(r) {
   if (r.error || r.status === null) throw new Error('ps did not finish')
   const out = String(r.stdout).trim()
@@ -725,7 +726,7 @@ export function parsePs(r) {
   if (r.status !== 0 || out === '') throw new Error(`ps exit ${r.status}`)
   const m = /^(\w{3}\s+\w{3}\s+\d+\s+\d+:\d+:\d+\s+\d{4})\s+(.+)$/.exec(out)
   if (!m) throw new Error('ps output not understood')
-  const startMs = Date.parse(m[1])
+  const startMs = Date.parse(`${m[1]} GMT`)
   if (!Number.isFinite(startMs)) throw new Error('ps start time not understood')
   return { comm: m[2].trim(), startMs }
 }

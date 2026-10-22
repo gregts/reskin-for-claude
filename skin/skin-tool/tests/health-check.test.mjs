@@ -200,6 +200,21 @@ async function ask(c, dir, sessionId, action) {
 }
 const PRESETS = { nord: NORD, dracula: DRACULA }
 
+test('helper: Claude\'s start time comes from Electron\'s process creation time (sleep-proof), else from uptime', async () => {
+  for (const [metrics, want] of [[() => [{ type: 'GPU', creationTime: 1 }, { type: 'Browser', creationTime: 1700000000123.4 }], 1700000000123], [undefined, null], [() => { throw new Error('no') }, null]]) {
+    const c = fakeClaude(() => goodPage(NORD, 'dark'))
+    if (metrics) c.ctx.process.getBuiltinModule('module').createRequire()().app.getAppMetrics = metrics
+    const d = tmp()
+    try {
+      const t0 = Date.now()
+      await vmRun(c, skin.helperCode(PRESETS, d.dir))
+      const boot = JSON.parse(readFileSync(path.join(d.dir, 'session.json'), 'utf8')).boot
+      if (want !== null) assert.equal(boot, want)
+      else assert.ok(Math.abs(boot - (t0 - 5_000)) < 2_000, `fallback boot ${boot}`) // the fake Claude's uptime is 5 s
+    } finally { d.done() }
+  }
+})
+
 test('helper: check is read-only, names the preset with its digest, and the session says it can check', async () => {
   const c = fakeClaude((p) => ({ ...goodPage(NORD, 'dark'), marker: [...p.sheets.values()].some((x) => x.includes('--reskin-active')) }))
   const d = tmp()
@@ -321,7 +336,7 @@ async function claudeProc() {
   const line = ps.stdout.split('\n').find((l) => l.trim().endsWith(CLAUDE_BINARY))
   if (!line) return null
   const pid = Number(line.trim().split(/\s+/)[0])
-  return { pid, startMs: parsePs(spawnSync('/bin/ps', ['-o', 'lstart=,comm=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } })).startMs }
+  return { pid, startMs: parsePs(spawnSync('/bin/ps', ['-o', 'lstart=,comm=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } })).startMs }
 }
 async function cli(dir, ...args) {
   const { spawn } = await import('node:child_process')

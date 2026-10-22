@@ -218,7 +218,7 @@ const osaAsync = (script, ms = 3_000) => new Promise((res) => {
 const identity = (pid) => identityOf(run('/bin/ps', ['-o', 'command=', '-p', String(pid)]), dir) // ours / other / gone / unknown
 
 // ---- switch and status: talk to the colour helper through its private folder. No tick, no port, no Chrome. ----
-const procOf = (pid) => parsePs(spawnSync('/bin/ps', ['-o', 'lstart=,comm=', '-p', String(pid)], { encoding: 'utf8', timeout: 4_000, env: { ...process.env, LC_ALL: 'C' } }))
+const procOf = (pid) => parsePs(spawnSync('/bin/ps', ['-o', 'lstart=,comm=', '-p', String(pid)], { encoding: 'utf8', timeout: 4_000, env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }))
 const portLine = () => { const r = spawnSync('/usr/sbin/lsof', ['-nP', '-iTCP:9229', '-sTCP:LISTEN'], { encoding: 'utf8', timeout: 4_000 }); return portState({ status: r.status, error: r.error, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }) }
 // P5: remember the preference (a preset name), never the permission. Failing to save it never fails a run.
 const savePrefs = (last) => {

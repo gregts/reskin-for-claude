@@ -1,6 +1,6 @@
 {
   "name": "skin",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "/skin <name> recolours the whole Claude desktop app with one of 16 skins (each with a light and a dark half). The first skin needs one tick of Developer > Enable Main Process Debugger; later switches need none until Claude quits. /skin off, /skin remove, /skin status, /skin check (is the skin still working). /skin log shows the troubleshooting log.",
   "homepage": "https://github.com/gregts/reskin-for-claude",
   "repository": "https://github.com/gregts/reskin-for-claude",
