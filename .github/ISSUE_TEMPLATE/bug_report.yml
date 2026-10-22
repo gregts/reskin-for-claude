@@ -1,0 +1,89 @@
+name: Bug report
+description: Something in Reskin did not work as expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please fill in every version. Claude updates often change what Reskin paints, so a report without versions is hard to follow.
+        **Security problem?** Do not use this form. Use the Security tab, then Report a vulnerability.
+        **Before you paste anything:** the log may hold private details. Known secret formats are removed, but that is a filter, not a guarantee. Never paste screenshots that show your chat titles.
+  - type: input
+    id: reskin
+    attributes:
+      label: Reskin version
+      description: The skin plugin version (`claude plugin list` shows it).
+    validations:
+      required: true
+  - type: input
+    id: claude
+    attributes:
+      label: Claude desktop version
+      description: The run report's "helper ... (Claude x.y.z)" line, or the "claude:" line of a log entry.
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac
+      description: For example "macOS 27.0.1, MacBook Air M3". Chip or Intel is enough; never a serial number.
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      description: Output of `node --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: chrome
+    attributes:
+      label: Google Chrome
+      options:
+        - Installed
+        - Not installed
+    validations:
+      required: true
+  - type: dropdown
+    id: appearance
+    attributes:
+      label: Claude's Settings > Appearance
+      options:
+        - Light
+        - Dark
+        - System (Mac in light mode)
+        - System (Mac in dark mode)
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: What you ran
+      description: For example `/skin nord`, `/skin check`, or `node skin-auto.mjs tick nord`.
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What you expected, and what happened instead
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: The run's report
+      description: The lines Reskin printed, including RESULT and PORT_STATE if you see them.
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: Last log entry
+      description: Run `/skin log`, or copy the last entry from `~/Library/Logs/Reskin/skin.log`. Read it first and remove anything private.
+      render: text
+  - type: checkboxes
+    id: port
+    attributes:
+      label: Debugger closed
+      options:
+        - label: "`lsof -nP -iTCP:9229 -sTCP:LISTEN` prints nothing now (if it prints something, quit and reopen Claude first)"

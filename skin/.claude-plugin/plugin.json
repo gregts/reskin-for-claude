@@ -1,0 +1,25 @@
+{
+  "name": "skin",
+  "version": "1.0.0",
+  "description": "/skin <name> recolours the whole Claude desktop app with one of 16 skins (each with a light and a dark half). The first skin needs one tick of Developer > Enable Main Process Debugger; later switches need none until Claude quits. /skin off, /skin remove, /skin status, /skin check (is the skin still working). /skin log shows the troubleshooting log.",
+  "homepage": "https://github.com/gregts/reskin-for-claude",
+  "repository": "https://github.com/gregts/reskin-for-claude",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Reskin for Claude contributors"
+  },
+  "userConfig": {
+    "toolDir": {
+      "type": "string",
+      "title": "Reskin tool folder",
+      "description": "The folder that holds skin-auto.mjs. Leave empty when the tool sits beside this mod (skin-tool).",
+      "default": ""
+    },
+    "node": {
+      "type": "string",
+      "title": "Node path",
+      "description": "Node 22 or newer. Leave empty to look in /opt/homebrew/bin, /usr/local/bin, then PATH.",
+      "default": ""
+    }
+  }
+}

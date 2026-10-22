@@ -1,0 +1,14 @@
+{
+  "name": "reskin-for-claude",
+  "description": "Unofficial colour skins for the whole Claude desktop app (macOS).",
+  "owner": {
+    "name": "Reskin for Claude contributors"
+  },
+  "plugins": [
+    {
+      "name": "skin",
+      "source": "./skin",
+      "description": "/skin <name> recolours the whole Claude desktop app (macOS) with one of 16 skins, each light and dark."
+    }
+  ]
+}

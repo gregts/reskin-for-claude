@@ -1,0 +1,50 @@
+@media (prefers-color-scheme: dark) {
+  *, *::before, *::after {
+    --cds-surface-0:#00222b !important; --cds-surface-1:#002b36 !important; --cds-surface-2:#073642 !important; --cds-surface-3:#0f3c48 !important;
+    --cds-neutral-30:#00222b !important;
+    --cds-text-primary:#a2aeae !important; --cds-text-secondary:#a1aeb0 !important; --cds-text-muted:#94a2a7 !important; --cds-text-accent:#5aa7dd !important;
+    --cds-text-danger:#ea8482 !important; --cds-text-success:#99a929 !important; --cds-text-warning:#c19c29 !important;
+    --cds-border:rgba(162, 174, 174, 0.12) !important; --cds-bg-user-message:rgba(162, 174, 174, 0.06) !important;
+    --cds-role-accent-50:#e8f1f9 !important; --cds-role-accent-100:#cde3f6 !important; --cds-role-accent-250:#85b8e4 !important; --cds-role-accent-300:#6baadf !important; --cds-role-accent-400:#46a6ee !important; --cds-role-accent-450:#3093da !important; --cds-role-accent-600:#015587 !important; --cds-role-accent-700:#165a80 !important; --cds-role-accent-800:#083c51 !important; --cds-role-accent-850:#06374a !important;
+    --cds-role-accent-fill:#3093da !important; --cds-role-accent-fill-hover:#46a6ee !important; --cds-role-accent-on:#002b36 !important;
+    --cds-fill-accent:#3093da !important; --cds-fill-accent-hover:#46a6ee !important; --cds-on-accent:#002b36 !important;
+    --cds-bg-accent:#083c51 !important; --cds-bg-accent-chip:#083c51 !important; --cds-border-accent:#165a80 !important;
+    --cds-radio-group-card-selected:#06374a !important; --cds-bg-accent-muted:rgba(48, 147, 218, 0.1) !important; --accent-100:205.059 69.6721% 52.1569% !important;
+  }
+  .dframe-sidebar, .dframe-sidebar * { --df-hover:#073642 !important; --df-selected:#133b4d !important; }
+  .status-dot, [data-cds=Pulse] { --cds-fill-accent:#5ca3fe !important; --cds-fill-warning:#fab219 !important; --cds-fill-danger:#ff7870 !important; --cds-text-muted:#a1a1a1 !important; }
+  html, body, .dframe-content { background-color:#002b36 !important; }
+  .dframe-sidebar, .dframe-sidebar-body { background-color:#00222b !important; }
+  .bg-surface-1, .bg-bg-100 { background-color:#002b36 !important; }
+  .bg-surface-2 { background-color:#073642 !important; }
+  .bg-surface-3, .bg-bg-000 { background-color:#0f3c48 !important; }
+  .bg-bg-200, .bg-bg-300 { background-color:#00222b !important; }
+  .text-primary, .text-text-100 { color:#a2aeae !important; }
+  .text-secondary, .text-text-300 { color:#a1aeb0 !important; }
+  .text-text-400, .text-text-500 { color:#94a2a7 !important; }
+}
+@media (prefers-color-scheme: light) {
+  *, *::before, *::after {
+    --cds-surface-0:#eee8d5 !important; --cds-surface-1:#fdf6e3 !important; --cds-surface-2:#fefbf2 !important; --cds-surface-3:#fefbf2 !important;
+    --cds-neutral-30:#eee8d5 !important;
+    --cds-text-primary:#073642 !important; --cds-text-secondary:#44555c !important; --cds-text-muted:#4e5f66 !important; --cds-text-accent:#1b6194 !important;
+    --cds-text-danger:#b22826 !important; --cds-text-success:#566300 !important; --cds-text-warning:#755900 !important;
+    --cds-border:rgba(7, 54, 66, 0.12) !important; --cds-bg-user-message:rgba(7, 54, 66, 0.06) !important;
+    --cds-role-accent-50:#e5eae0 !important; --cds-role-accent-100:#c3dadb !important; --cds-role-accent-250:#6badcf !important; --cds-role-accent-300:#6baadf !important; --cds-role-accent-400:#046aa6 !important; --cds-role-accent-450:#097cc1 !important; --cds-role-accent-600:#015587 !important; --cds-role-accent-700:#013b5f !important; --cds-role-accent-800:#00223b !important; --cds-role-accent-850:#021728 !important;
+    --cds-role-accent-fill:#097cc1 !important; --cds-role-accent-fill-hover:#046aa6 !important; --cds-role-accent-on:#ffffff !important;
+    --cds-fill-accent:#097cc1 !important; --cds-fill-accent-hover:#046aa6 !important; --cds-on-accent:#ffffff !important;
+    --cds-bg-accent:#c3dadb !important; --cds-bg-accent-chip:#c3dadb !important; --cds-border-accent:#6badcf !important;
+    --cds-radio-group-card-selected:#e5eae0 !important; --cds-bg-accent-muted:rgba(9, 124, 193, 0.1) !important; --accent-100:202.5 91.0891% 39.6078% !important;
+  }
+  .dframe-sidebar, .dframe-sidebar * { --df-hover:#e1dfd1 !important; --df-selected:#d0dad8 !important; }
+  .status-dot, [data-cds=Pulse] { --cds-fill-accent:#0362c1 !important; --cds-fill-warning:#965001 !important; --cds-fill-danger:#c31a26 !important; --cds-text-muted:#636363 !important; }
+  html, body, .dframe-content { background-color:#fdf6e3 !important; }
+  .dframe-sidebar, .dframe-sidebar-body { background-color:#eee8d5 !important; }
+  .bg-surface-1, .bg-bg-100 { background-color:#fdf6e3 !important; }
+  .bg-surface-2 { background-color:#fefbf2 !important; }
+  .bg-surface-3, .bg-bg-000 { background-color:#fefbf2 !important; }
+  .bg-bg-200, .bg-bg-300 { background-color:#eee8d5 !important; }
+  .text-primary, .text-text-100 { color:#073642 !important; }
+  .text-secondary, .text-text-300 { color:#44555c !important; }
+  .text-text-400, .text-text-500 { color:#4e5f66 !important; }
+}

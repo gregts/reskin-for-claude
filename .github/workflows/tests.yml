@@ -1,0 +1,27 @@
+name: tests
+
+# Runs the tool's test suite on a GitHub macOS runner on every push and pull request, or by hand
+# from the Actions tab ("Run workflow"). No test here opens Claude, the debugger port or anything on screen.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tool-tests:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22' # the oldest Node that Reskin supports
+      - name: Tool tests
+        working-directory: skin/skin-tool
+        run: node --test --test-concurrency=1 'tests/*.test.mjs'
