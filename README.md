@@ -3,6 +3,11 @@
 Colour skins for the whole Claude desktop app on macOS: sidebar, chat, cards, menus and buttons. 16 skins, each with a
 dark and a light half that follows Claude's own Appearance setting.
 
+
+
+https://github.com/user-attachments/assets/4dfcedbd-b10f-4441-9617-c501e1b1c003
+
+
 ![Claude desktop with the tokyo-night skin: dark on the left, light on the right](screenshots/hero.png)
 
 **Unofficial, just for fun, use at your own risk.** Reskin is not made, checked or endorsed by Anthropic. "Claude" is a
