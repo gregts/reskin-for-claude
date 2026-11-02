@@ -38,7 +38,7 @@ import {
   hideScript, identityOf, nodeOk, pgrepState, portState, safePid, watchDialog, writeAll,
   closeMessageThenApply, dialogReadScript, parseDialogRead, provesNoDialog, NO_CHROME_GUARD_FIRST_S, NO_CHROME_TIMES,
   CLAUDE_BINARY, TICK, LOCK_PORT, checksLine, helperActiveLine, judgeHealth, healthReport, expectedColours, judgeChecks, liveSession, parsePs, privateDir, readPrefs, sendSwitch,
-  stateDirOf, writePrivateJson, writePrivateText, readPrivateJson, debuggerClosedLine, tcpProbe,
+  stateDirOf, writePrivateJson, writePrivateText, readPrivateJson, debuggerClosedLine, tcpProbe, TYPE_WHAT, typeLine,
 } from './skin-lib.mjs'
 import { loggingOn, startRunLog } from './skin-log.mjs'
 
@@ -79,7 +79,7 @@ if (!nodeOk(process.versions.node)) {
 
 const argv0 = process.argv.slice(2)
 // The first word may name the way to run: tick ("I tick it"), one-click (the run ticks), switch, status.
-const verb = ['tick', 'one-click', 'switch', 'status', 'check'].includes(argv0[0]) ? argv0[0] : null
+const verb = ['tick', 'one-click', 'switch', 'status', 'check', 'type'].includes(argv0[0]) ? argv0[0] : null
 const tickMode = verb === 'tick'
 const args = verb ? argv0.slice(1) : argv0
 const PRESET_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
@@ -99,7 +99,7 @@ const oneClickShipped = (() => {
   try { return JSON.parse(readFileSync(f, 'utf8'))?.oneClick === true } catch { return false }
 })()
 // Every run that is not tick, switch, status, check or --check would tick the menu itself (one-click, batch, no verb).
-if (!oneClickShipped && !tickMode && !['switch', 'status', 'check'].includes(verb) && !checkOnly) {
+if (!oneClickShipped && !tickMode && !['switch', 'status', 'check', 'type'].includes(verb) && !checkOnly) {
   usage('one-click is not in this release. Use: node skin-auto.mjs tick <preset> (or /skin <name> in Claude), then switch.')
 }
 const isBatch = args[0] === 'batch'
@@ -143,11 +143,14 @@ const batchArgs = () => {
 }
 const arg = isBatch ? 'batch' : args.find((a) => !a.startsWith('--'))
 if (!arg && !checkOnly && verb !== 'status' && verb !== 'check') usage(oneClickShipped ? 'Usage: node skin-auto.mjs [tick|one-click] <preset|stylesheet.css> | switch <preset|off|remove> | status | check | menu-probe | remove | reset | state | selftest | probe | batch a,b,c [--final previous|off] | --check  [--dry-run]'
-  : 'Usage: node skin-auto.mjs tick <preset|remove> | switch <preset|off|remove> | status | check')
+  : 'Usage: node skin-auto.mjs tick <preset|remove> | switch <preset|off|remove> | type <on|off> | status | check')
 let skinArgs = []
 if (isBatch) skinArgs = batchArgs()
-else if (['remove', 'state', 'selftest', 'reset', 'probe', 'menu-probe'].includes(arg)) skinArgs = [arg]
-else if (arg && !['switch', 'status', 'check'].includes(verb)) {
+// The public release (tick only) takes a preset or remove; the developer modes (probes, state, selftest, reset) stay
+// in the development copy, where release.json is absent.
+else if (!oneClickShipped && ['state', 'selftest', 'reset', 'probe', 'type-probe', 'menu-probe'].includes(arg)) usage(`${arg} is a developer mode and is not in this release. Use: node skin-auto.mjs tick <preset|remove>.`)
+else if (['remove', 'state', 'selftest', 'reset', 'probe', 'type-probe', 'menu-probe'].includes(arg)) skinArgs = [arg]
+else if (arg && !['switch', 'status', 'check', 'type'].includes(verb)) {
   // A bare preset name means presets/<name>.css. Only Reskin's own presets are applied (as AGENTS.md says), so
   // an agent or a script cannot slip in a stylesheet of its own; a path is accepted only when it is one of those presets.
   const real = (f) => { try { return nodeFs.realpathSync(f) } catch { return null } }
@@ -221,10 +224,11 @@ const identity = (pid) => identityOf(run('/bin/ps', ['-o', 'command=', '-p', Str
 const procOf = (pid) => parsePs(spawnSync('/bin/ps', ['-o', 'lstart=,comm=', '-p', String(pid)], { encoding: 'utf8', timeout: 4_000, env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }))
 const portLine = () => { const r = spawnSync('/usr/sbin/lsof', ['-nP', '-iTCP:9229', '-sTCP:LISTEN'], { encoding: 'utf8', timeout: 4_000 }); return portState({ status: r.status, error: r.error, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }) }
 // P5: remember the preference (a preset name), never the permission. Failing to save it never fails a run.
-const savePrefs = (last) => {
+// `type` keeps what was saved unless given: a skin change or Off leaves the remembered type as it was.
+const savePrefs = (last, type = readPrefs(nodeFs, STATE).type) => {
   try {
     if (privateDir(nodeFs, STATE).missing) nodeFs.mkdirSync(STATE, { recursive: true, mode: 0o700 })
-    if (privateDir(nodeFs, STATE).ok) writePrivateJson(nodeFs, STATE, 'prefs.json', { v: 1, last }, randomUUID)
+    if (privateDir(nodeFs, STATE).ok) writePrivateJson(nodeFs, STATE, 'prefs.json', { v: 1, last, type }, randomUUID)
   } catch {}
 }
 // This run's pid in the private folder while it holds the run lock, so an older run's guardian A can tell a
@@ -241,7 +245,9 @@ const unmarkRun = () => {
   if (!marked) return
   try { if (nodeFs.readFileSync(`${STATE}/run-pid`, 'utf8') === String(process.pid)) nodeFs.unlinkSync(`${STATE}/run-pid`) } catch {}
 }
-const reapplyOffer = (last) => (last ? `Reapply ${last}? Run: /skin ${last} (or: node skin-auto.mjs tick ${last}); it needs one tick of Developer > Enable Main Process Debugger.` : null)
+const reapplyOffer = (last, type = false) => (last ? `Reapply ${last}? Run: /skin ${last} (or: node skin-auto.mjs tick ${last}); it needs one tick of Developer > Enable Main Process Debugger.${type ? ' Then /skin type on for the bold headers (no tick).' : ''}`
+  // No skin was on, only the bold headers: the helper still needs one skin to start it, then Off keeps Claude's colours. Starts with "Reapply " so the mod's list keeps it.
+  : type ? 'Reapply the bold headers? Run any skin, for example /skin nord (or: node skin-auto.mjs tick nord); it needs one tick of Developer > Enable Main Process Debugger. Then /skin off and /skin type on (no tick).' : null)
 
 // Health check (17 Oct 2026): read-only, through the colour helper. No port, no tick, no stylesheet change.
 const TESTED_FILE = path.join(here, 'tested-versions.json')
@@ -262,7 +268,7 @@ async function healthCheck(live, prefs) {
   if (live.state === 'outdated') return ['refused', EXIT.refused, [`health: unknown (${live.why})`, DEBUGGER_UNUSED]]
   if (live.state === 'unknown') return ['refused', EXIT.refused, [`health: unknown (could not tell whether a colour helper is running: ${live.why})`, DEBUGGER_UNUSED]]
   if (live.state === 'none') {
-    return ['ok', EXIT.ok, [`health: unknown (no colour helper in this Claude: ${live.why}; the check works through the helper, which the first skin after Claude starts puts in)`, DEBUGGER_UNUSED, 'helper: none', reapplyOffer(prefs.last)]]
+    return ['ok', EXIT.ok, [`health: unknown (no colour helper in this Claude: ${live.why}; the check works through the helper, which the first skin after Claude starts puts in)`, DEBUGGER_UNUSED, 'helper: none', reapplyOffer(prefs.last, prefs.type)]]
   }
   if (!Array.isArray(live.session.caps) || !live.session.caps.includes('check')) {
     // An older helper would count the request as ignored: nothing is sent.
@@ -281,7 +287,35 @@ async function healthCheck(live, prefs) {
   if (j.version) {
     try { writePrivateJson(nodeFs, STATE, 'last-check.json', { v: 1, version: j.version, verdict: j.verdict, at: new Date().toISOString() }, randomUUID) } catch {}
   }
-  return [rep.code === 0 ? 'ok' : 'failed', rep.code === 0 ? EXIT.ok : EXIT.failed, [...rep.lines, '(as the colour helper reports; no debugger checked it)', DEBUGGER_UNUSED, helperActiveLine(live.session.version)]]
+  return [rep.code === 0 ? 'ok' : 'failed', rep.code === 0 ? EXIT.ok : EXIT.failed, [...rep.lines, typeLine(ack), '(as the colour helper reports; no debugger checked it)', DEBUGGER_UNUSED, helperActiveLine(live.session.version)]]
+}
+
+// Type (2 Nov 2026): project headers in the Code tab sidebar bold and the same size as the session names, through the
+// colour helper only (its own sheet beside the colours; /skin off keeps it, remove takes it). No tick, no port.
+async function typeRun(live, which) {
+  if (which !== 'on' && which !== 'off') return ['refused', EXIT.usage, ['Usage: node skin-auto.mjs type on|off']]
+  if (live.state === 'outdated') return ['refused', EXIT.refused, [`${live.why} Nothing was changed.`]]
+  if (live.state === 'unknown') return ['refused', EXIT.refused, [`Could not tell whether a colour helper is running (${live.why}). Nothing was changed.`]]
+  if (live.state === 'none') {
+    return ['refused', EXIT.refused, [`No colour helper is running in this Claude (${live.why}), so nothing was changed. ${which === 'on' ? 'Apply a skin first (/skin <name>, one tick), then run /skin type on.' : 'Without a helper there is nothing to turn off: quitting and reopening Claude clears it.'}`]]
+  }
+  if (which === 'on' && (!Array.isArray(live.session.caps) || !live.session.caps.includes('type'))) {
+    // The helper generation is current here, so a missing cap means this copy offered no type sheet: a tick cannot fix that.
+    // Off is never gated: the helper always accepts type-off, as it only removes.
+    return ['refused', EXIT.refused, ['Type is not available in this copy of Reskin (its type sheet is missing or did not pass its check), so nothing was changed. Reinstall Reskin to get it back.', 'debugger: not used (switching needs no port)', helperActiveLine(live.session.version)]]
+  }
+  const { ack } = await sendSwitch(nodeFs, STATE, live.session.session, `type-${which}`, { randomUUID, waitMs: 10_000 })
+  if (ack === null || ack.action !== `type-${which}`) {
+    return ['failed', EXIT.failed, [`type ${which} unconfirmed: the colour helper did not answer within 10 s. Nothing else was tried (no tick, no port).`, 'debugger: not used (switching needs no port)', 'helper: not answering']]
+  }
+  if (ack.ok) savePrefs(readPrefs(nodeFs, STATE).last, which === 'on')
+  return [ack.ok ? 'ok' : 'failed', ack.ok ? EXIT.ok : EXIT.failed, [
+    ack.ok ? (which === 'on' ? `Type on: ${TYPE_WHAT} (${ack.applied} of ${ack.eligible} Claude page(s)). It stays through skin changes and /skin off; /skin type off or /skin remove takes it off.` : `Type off: Claude's own header type is back${ack.reloaded ? ` (${ack.reloaded} page(s) reloaded to be sure)` : ''}.`)
+      : `The helper could not turn type ${which}: ${(ack.errors ?? []).join('; ') || 'no reason given'}`,
+    '(as the colour helper reports; no debugger checked it)',
+    'debugger: not used (switching needs no port)',
+    helperActiveLine(live.session.version),
+  ]]
 }
 
 async function helperRun() {
@@ -303,10 +337,12 @@ async function helperRun() {
       live.state === 'active' ? `requests: ${same ? ack.requests : 0} handled, ${same ? ack.ignored : 0} ignored${same ? `; last: ${ack.action} (${ack.ok ? 'ok' : 'failed'})` : ''}` : null,
       `last skin: ${prefs.last ?? 'none'}`,
       ...healthHint(live),
-      live.state === 'outdated' || live.state === 'unknown' ? (live.state === 'outdated' ? live.why : 'Quit and reopen Claude, then run /skin again.') : live.state !== 'active' ? reapplyOffer(prefs.last) : null,
+      `type: ${prefs.type ? 'on when last set' : 'off'}`,
+      live.state === 'outdated' || live.state === 'unknown' ? (live.state === 'outdated' ? live.why : 'Quit and reopen Claude, then run /skin again.') : live.state !== 'active' ? reapplyOffer(prefs.last, prefs.type) : null,
     ])
   }
   if (verb === 'check') return end(...(await healthCheck(live, prefs)))
+  if (verb === 'type') return end(...(await typeRun(live, args[0])))
   const action = args[0]
   if (!action || !(action === 'off' || action === 'remove' || (PRESET_NAME.test(action) && !action.startsWith('dotcheck-') && existsSync(presetFile(action))))) {
     return end('refused', EXIT.usage, [`Usage: node skin-auto.mjs switch <preset|off|remove>. ${action ? `No preset called ${action}.` : ''}`])
@@ -331,14 +367,14 @@ async function helperRun() {
   if (action === 'remove') {
     // The first answer only says "accepted"; success needs the helper's final "done" answer and the session file gone.
     let done = ack.phase === 'done' ? ack : null
-    for (let i = 0; i < 140 && done === null; i++) {
+    for (let i = 0; i < 200 && done === null; i++) { // 20 s: more than the helper's own removal budget (12 s)
       const r = readPrivateJson(nodeFs, `${STATE}/ack.json`).value
       if (r?.session === live.session.session && r.nonce === ack.nonce && r.phase === 'done') done = r
       else await new Promise((res) => setTimeout(res, 100))
     }
     const gone = readPrivateJson(nodeFs, `${STATE}/session.json`).missing === true
     const ok = done?.ok === true && gone
-    if (ok) savePrefs(null)
+    if (ok) savePrefs(null, false)
     return end(ok ? 'ok' : 'failed', ok ? EXIT.ok : EXIT.failed, [
       ok ? 'Skin and colour helper removed, as the helper itself reports (no debugger was used to check it, and a program running as you could fake that report; quitting and reopening Claude is the proof). The next skin needs one tick.'
         : done === null ? 'Removal not confirmed: the helper accepted it but did not report that it finished. Check with /skin status (or: node skin-auto.mjs status).'
@@ -358,7 +394,7 @@ async function helperRun() {
     helperActiveLine(live.session.version),
   ])
 }
-if (verb === 'switch' || verb === 'status' || verb === 'check') await helperRun()
+if (verb === 'switch' || verb === 'status' || verb === 'check' || verb === 'type') await helperRun()
 
 if (checkOnly) {
   const chrome = chromeState()
@@ -440,7 +476,7 @@ function absorb(out, code) {
   if (skinArgs[0] === 'remove' || skinArgs[0] === 'reset') {
     report.checks = 'sampled colour checks: not applicable (skin removed)'
     report.helper = code === 0 ? 'helper: none (removed)' : 'helper: unknown (the removal did not fully succeed; check with /skin status or node skin-auto.mjs status)'
-    if (code === 0) savePrefs(null)
+    if (code === 0) savePrefs(null, false)
     return
   }
   if (skinArgs[0] !== 'apply') return

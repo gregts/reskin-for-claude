@@ -121,7 +121,7 @@ test('P4: 8 s in-Claude timer for a tick-mode apply, 22 s for everything else, a
   assert.equal(TICK.armMs, 8_000)
   assert.ok(TICK.armMs >= 3_000 + 3_000 + 2_000, 'the slowest permitted quick apply (3 s change, 3 s helper) plus 2 s fits')
   assert.match(skinSrc, /'changing the stylesheets'\)/)
-  assert.match(skinSrc, /helperCode\(presets\.map, STATE_DIR\), 3_000\)/)
+  assert.match(skinSrc, /helperCode\(presets\.map, STATE_DIR, typeSheets\), 3_000\)/)
   assert.match(skinSrc, /within\(Promise\.all\(webContents\.getAllWebContents\(\)\.map\(put\)\), 3000,/)
   assert.deepEqual(delays(m.arm(TICK.armMs)), [8_000])
   assert.deepEqual(delays(m.ARM), [m.FALLBACK_CLOSE_MS])

@@ -12,7 +12,8 @@ uses no logo.
 
 ## What it does to Claude
 
-Reskin changes colours only, through Claude's own Developer menu. It does not patch, unpack or redistribute any part of
+Reskin changes colours, and, only if you turn on the optional bold headers, the font size and weight of the sidebar's
+project headers and session names, through Claude's own Developer menu. It does not patch, unpack or redistribute any part of
 Claude, and it contains no code from Claude. A Claude update may break it at any time.
 
 ## Colour schemes

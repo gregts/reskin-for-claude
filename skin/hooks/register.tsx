@@ -28,7 +28,7 @@ type Run = { exitCode: number; stdout: string; stderr: string }
 // The steps of one /skin run, for its log entry. The tool is told the mod logs it, so it does not log the step twice.
 type Steps = Step[]
 const TOOL_ENV = { RESKIN_LOG_BY: 'skin-mod' }
-const viaOf = (verb: string) => verb === 'switch' ? 'colour helper' : verb === 'tick' ? 'debugger, you tick' : verb === 'one-click' ? 'debugger, one click' : verb === 'status' ? 'status' : verb === 'check' ? 'health check' : verb
+const viaOf = (verb: string) => verb === 'switch' ? 'colour helper' : verb === 'tick' ? 'debugger, you tick' : verb === 'one-click' ? 'debugger, one click' : verb === 'status' ? 'status' : verb === 'check' ? 'health check' : verb === 'type' ? 'type (colour helper)' : verb
 // A tool ended by a signal has no exit code: the step says so (and records exit 1, as the answer always did).
 const ended = (res: { code: number | null; signal?: string | null }) => res.code !== null ? null : res.signal ? `ended by ${res.signal}` : 'ended without an exit code'
 // Timings for the log only: the local clock, so no engine call ever sits between a piece of output and the card.
@@ -270,7 +270,7 @@ export const register: Register = (on, options) => {
     try {
       await $.command.register({
         name: 'skin',
-        description: 'Recolour the whole Claude app: /skin <name>, /skin off, /skin remove, /skin status, /skin check, /skin list, /skin log, /skin about',
+        description: 'Recolour the whole Claude app: /skin <name>, /skin off, /skin remove, /skin status, /skin check, /skin type on|off, /skin list, /skin log, /skin about',
         argumentHint: argumentHintOf((await skinNames($), oneClickNow)),
       })
     } catch {
@@ -332,6 +332,11 @@ async function handle($: EngineInterface, parsed: ReturnType<typeof parse>, step
       // Read-only, through the colour helper: no tick, no port. The tool prints the whole plain report.
       const r = await quick($, env, ['check'], steps)
       return said(r.stdout.split('\n').filter(l => l.trim() && !/^(PORT_STATE|RESULT):/.test(l)).join('\n') || [`The check did not finish (exit ${r.exitCode}).`, ...r.stderr.split('\n').filter(l => l.trim()).slice(-3)].join('\n'), last(r))
+    }
+    if (parsed.kind === 'type') {
+      // Through the colour helper only: no tick, no port. The tool prints the plain report.
+      const r = await quick($, env, ['type', parsed.on ? 'on' : 'off'], steps)
+      return said(r.stdout.split('\n').filter(l => l.trim() && !/^(PORT_STATE|RESULT):/.test(l)).join('\n') || [`type did not finish (exit ${r.exitCode}).`, ...r.stderr.split('\n').filter(l => l.trim()).slice(-3)].join('\n'), last(r))
     }
     if (parsed.kind === 'list') {
       const all = await presets($, env.tool).catch(() => [] as Preset[])

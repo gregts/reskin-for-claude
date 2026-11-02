@@ -677,7 +677,7 @@ export const CLAUDE_BINARY = '/Applications/Claude.app/Contents/MacOS/Claude'
 // (names, markers, actions). A helper of another generation is still running OLD code inside Claude: switching through
 // it, checking through it or ticking a new one beside it could leave two skins on, so every path refuses until Claude
 // is quit and reopened (which ends the old helper and its colours).
-export const HELPER_GEN = 2
+export const HELPER_GEN = 3
 export const OUTDATED_WHY = 'Reskin was updated after the colour helper inside Claude started. Quit and reopen Claude once (that ends the old helper and its colours), then run /skin again.'
 export function liveSession(fs, dir, proc, { uid = process.getuid(), claudeStart } = {}) {
   // A folder or session file that cannot be trusted is not proof of a running helper: a helper lives only inside the
@@ -762,11 +762,11 @@ export async function sendSwitch(fs, dir, session, action, { uid = process.getui
   return { nonce, ack }
 }
 
-// P5: remember the preference, never the permission. Only a preset name (or nothing) is kept.
+// P5: remember the preference, never the permission. Only a preset name (or nothing) is kept, and whether type was on.
 export function readPrefs(fs, dir, uid = process.getuid()) {
   const r = readPrivateJson(fs, `${dir}/prefs.json`, { uid, max: 1024 })
   const last = r.value?.last
-  return typeof last === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(last) ? { last } : { last: null }
+  return { last: typeof last === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(last) ? last : null, type: r.value?.type === true }
 }
 
 // Tick mode's wait: polls the port until it opens, the window ends, or the run is stopping. A tick exactly at the end of
@@ -878,4 +878,33 @@ export function ownTestSheets(files, fs) {
       try { const s = fs.lstatSync(f); if (s.isFile() && s.ino === ino && s.size === size && s.mtimeMs === mtimeMs) fs.unlinkSync(f) } catch {}
     }
   }
+}
+
+// Type (2 Nov 2026): what the type sheet does, in the words the client prints.
+export const TYPE_WHAT = 'bold project headers'
+// The check's type line: what the helper means to show, against what the pages show (the type marker). Never changes
+// the colour verdict. Only a stable look counts; anything else is "not checked".
+export function typeLine(ack) {
+  if (ack?.type !== 'on' && ack?.type !== 'off' && ack?.type !== 'unknown') return null
+  const pages = Array.isArray(ack.sample?.pages) ? ack.sample.pages : []
+  const read = pages.filter((p) => p && !p.error && typeof p.typeMarker === 'boolean')
+  const seen = read.filter((p) => p.typeMarker).length
+  const lost = pages.length - read.length
+  const of = `of ${pages.length} Claude page(s)`
+  const unread = lost > 0 ? ` (${lost} ${of} could not be read)` : ''
+  if (ack.sample?.stable !== true || pages.length === 0) return `type: ${ack.type === 'on' ? 'sheet on' : ack.type} (not checked on the page)`
+  if (ack.type === 'on') {
+    if (seen < pages.length) return `type: sheet on, showing on ${seen} ${of}${unread}${read.length > seen ? ': run /skin type on again' : ''}`
+    // The marker proves the sheet is in; the header counts (numbers only) prove it reaches Claude's sidebar.
+    const sided = read.filter((p) => p.anchors?.sidebar === true)
+    const withSide = sided.filter((p) => Number.isInteger(p.typeHeaders))
+    if (sided.length === 0) return 'type: sheet on (no sidebar on screen now, so the headers were not checked)'
+    if (withSide.length === 0) return 'type: sheet on (this colour helper does not count headers yet: after the next skin applied with a tick, the check counts them)'
+    if (withSide.some((p) => p.typeHeaders === 0)) return `type: sheet on, but it found no project header in the sidebar (Claude may have changed its sidebar): run /skin type off`
+    const headers = Math.max(...withSide.map((p) => p.typeHeaders))
+    const current = withSide.some((p) => p.typeCurrent > 0)
+    return `type: ${TYPE_WHAT} on (${headers} header(s); ${current ? 'the open chat\'s project is highlighted' : 'no project highlighted now: the open chat\'s project is collapsed or not in the sidebar'})`
+  }
+  if (ack.type === 'off') return seen > 0 ? `type: off, but still showing on ${seen} ${of}${unread}: run /skin type off again, or press Cmd-R in Claude` : lost > 0 ? `type: off${unread}` : null
+  return `type: unknown sheet (${seen} ${of} show one${unread}): run /skin type off`
 }

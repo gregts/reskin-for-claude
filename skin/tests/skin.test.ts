@@ -23,6 +23,11 @@ describe('parse', () => {
     expect(parse('nord --tick')).toEqual({ kind: 'apply', name: 'nord', via: 'tick' })
     expect(parse('--one-click nord')).toEqual({ kind: 'apply', name: 'nord', via: 'one-click' })
   })
+  test('type on and type off are their own command; anything else after type is refused', () => {
+    expect(parse('type on')).toEqual({ kind: 'type', on: true })
+    expect(parse('TYPE OFF')).toEqual({ kind: 'type', on: false })
+    for (const bad of ['type', 'type bold', 'type on off', 'type on --tick', '--tick type on']) expect(parse(bad).kind).toBe('bad')
+  })
   test('anything path-like, odd or doubled is refused', () => {
     for (const bad of ['../x', 'a/b', '..', 'dracula.css', 'a b', '-x', 'x-', 'a--b', '$(rm)', 'a;b', 'nord --force', 'nord --tick --one-click', '--tick', 'status --tick']) {
       expect(parse(bad).kind).toBe('bad')
@@ -129,7 +134,7 @@ describe('summary', () => {
 
 // ---- the command end to end, with a fake file system, fake runs and a fake streamed run ----
 const TOOL = '/tool'
-type Answers = { registerThrows?: boolean; defaults?: [number, string, string]; switch?: [number, string]; status?: [number, string]; check?: [number, string]; tick?: string[]; tickCode?: number; spawn?: (argv: readonly string[], signal: AbortSignal) => AsyncGenerator<{ stream: 'stdout' | 'stderr'; text: string }, { value: { code: number | null; signal: string | null } }> }
+type Answers = { registerThrows?: boolean; defaults?: [number, string, string]; switch?: [number, string]; status?: [number, string]; check?: [number, string]; type?: [number, string]; tick?: string[]; tickCode?: number; spawn?: (argv: readonly string[], signal: AbortSignal) => AsyncGenerator<{ stream: 'stdout' | 'stderr'; text: string }, { value: { code: number | null; signal: string | null } }> }
 function world(on: On, a: Answers = {}) {
   mock.store(on)
   const runs: (readonly string[])[] = []
@@ -164,6 +169,12 @@ function world(on: On, a: Answers = {}) {
   })
   on('process.spawn', async function* ($, e, next) {
     // Quick runs (switch, status) are streamed too since 0.6.0; they count as runs here, tick runs as spawns.
+    if (e.argv[2] === 'type') {
+      runs.push(e.argv)
+      const [code, text] = a.type ?? [0, 'Type on: bold project headers (1 of 1 Claude page(s)).\n(as the colour helper reports; no debugger checked it)\ndebugger: not used (switching needs no port)\nhelper: active until Claude quits (Claude 4.4212.0)\nPORT_STATE: closed\nRESULT: ok']
+      if (text) yield { stream: 'stdout', text }
+      return { value: { code, signal: null } }
+    }
     if (e.argv[2] === 'check') {
       runs.push(e.argv)
       const [code, text] = a.check ?? [0, 'health: pass (skin dracula shows its own colours in every place checked)\nchecked: dark mode only (the light half is checked when Claude shows light)\n(as the colour helper reports; no debugger checked it)\ndebugger: not used (the check needs no port)\nhelper: active until Claude quits (Claude 2.42304.0)\nPORT_STATE: closed\nRESULT: ok']
@@ -275,6 +286,16 @@ test('/skin check shows the tool\'s own report, never an apply headline; a silen
   expect(ok.split('\n')[0]).toBe('health: pass (skin dracula shows its own colours in every place checked)')
   expect(ok).toContain('debugger: not used (the check needs no port)')
   expect(ok).not.toMatch(/applied|removed|PORT_STATE|RESULT/)
+  expect(w.spawns).toHaveLength(0)
+})
+
+test('/skin type on runs the tool\'s type verb through the helper and shows its report; no tick', OPTS, async ($, on) => {
+  const w = world(on)
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const t = (await $.command.run(cmd('type on'))).text ?? ''
+  expect(tool(w.runs).at(-1)!.slice(-2)).toEqual(['type', 'on'])
+  expect(t.split('\n')[0]).toMatch(/^Type on: bold project headers/)
+  expect(t).not.toMatch(/PORT_STATE|RESULT/)
   expect(w.spawns).toHaveLength(0)
 })
 

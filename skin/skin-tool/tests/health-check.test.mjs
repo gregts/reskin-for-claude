@@ -221,7 +221,7 @@ test('helper: check is read-only, names the preset with its digest, and the sess
   try {
     await vmRun(c, skin.setCode(NORD))
     const r = await vmRun(c, skin.helperCode(PRESETS, d.dir))
-    assert.deepEqual(JSON.parse(readFileSync(path.join(d.dir, 'session.json'), 'utf8')).caps, ['check'])
+    assert.deepEqual(JSON.parse(readFileSync(path.join(d.dir, 'session.json'), 'utf8')).caps, ['check']) // no type sheet given: no type switch offered
     const before = c.pages[0].inserts
     const { ack } = await ask(c, d.dir, r.session, 'check')
     assert.equal(ack.action, 'check'); assert.equal(ack.current, 'nord'); assert.equal(ack.digest, sha(NORD))

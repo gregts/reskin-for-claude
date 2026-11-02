@@ -13,6 +13,7 @@ export type Parsed =
   | { kind: 'list' }
   | { kind: 'status' }
   | { kind: 'check' }
+  | { kind: 'type'; on: boolean }
   | { kind: 'about' }
   | { kind: 'log' }
   | { kind: 'off'; via: Via }
@@ -29,6 +30,12 @@ export function parse(args: string, oneClick = true): Parsed {
   if (unknown) return { kind: 'bad', why: `Unknown option ${unknown}. Use --tick${oneClick ? ' or --one-click' : ''}.` }
   if (flags.includes('--tick') && flags.includes('--one-click')) return { kind: 'bad', why: oneClick ? 'Choose one: --tick or --one-click.' : '--one-click is not in this release. Use --tick.' }
   const via: Via = flags.includes('--tick') ? 'tick' : flags.includes('--one-click') ? 'one-click' : 'auto'
+  // Type (2 Nov 2026): bold project headers, the same size as the session names, through the colour helper.
+  if (rest[0] === 'type') {
+    if (flags.length) return { kind: 'bad', why: 'type takes no options.' }
+    if (rest.length !== 2 || (rest[1] !== 'on' && rest[1] !== 'off')) return { kind: 'bad', why: 'Use /skin type on or /skin type off.' }
+    return { kind: 'type', on: rest[1] === 'on' }
+  }
   if (rest.length > 1) return { kind: 'bad', why: 'One skin name at a time, for example /skin dracula.' }
   const word = rest[0] ?? ''
   if (word === '' || word === 'list') return flags.length ? { kind: 'bad', why: 'Options go with a skin name, off or remove.' } : { kind: 'list' }
@@ -94,7 +101,7 @@ export function listText(presets: readonly Preset[], macMode: 'dark' | 'light' |
     ...(some('light') ? [`Light only: ${names('light')}`] : []),
     ...(some('unknown') ? [`Other (mode not recognised): ${names('unknown')}`] : []),
     `${macMode === 'unknown' ? 'I could not read your Mac\'s appearance' : `Your Mac is in ${macMode} mode`}. Claude follows the Mac only when Settings > Appearance is System${some('dark') || some('light') ? '; a dark-only or light-only skin shows only while Claude looks that way' : ''}.`,
-    '/skin <name> applies one: the first needs one tick of Developer > Enable Main Process Debugger, later switches need none until Claude quits. /skin off, /skin remove, /skin status, /skin check.',
+    '/skin <name> applies one: the first needs one tick of Developer > Enable Main Process Debugger, later switches need none until Claude quits. /skin off, /skin remove, /skin status, /skin check. /skin type on makes the project headers bold.',
     DEV_MODE,
   ].join('\n')
 }
@@ -226,12 +233,15 @@ export const ABOUT = [
   '  • On a Mac without Chrome, Claude shows a message and the debugger stays on until it is closed with OK.',
   '  • If Reskin stops part-way, a timer inside Claude closes it within 22 seconds once that timer is set; before that, backup helpers try to close it for several minutes, but only once Reskin has seen it open. If in doubt, quit and reopen Claude: that always closes it.',
   '',
-  'Every run ends with "debugger: confirmed closed", or a clear warning if that could not be confirmed.',
+  'Every run that opens the debugger ends with "debugger: confirmed closed", or a clear warning if that could not be confirmed. Colour helper runs say "debugger: not used".',
   '',
   'Reskin sends nothing online and changes no Claude files.',
-  'Skins switch with no click until Claude quits. Undo with /skin off, or quit Claude.',
+  'Skins switch with no click until Claude quits. /skin off removes colours; /skin remove removes colours, type changes and the helper. Quitting Claude clears both.',
   '',
-  'Every /skin run is saved for troubleshooting in ~/Library/Logs/Reskin/skin.log (known secret formats removed). /skin log shows the last few.',
+  'Type is optional and starts off. Apply a skin first to start the helper, then use /skin type on. It sets project headers to 14px at weight 600 and the shared sidebar row text size to 13px, which can affect other sidebar text. The current chat\'s project uses the accent while its chat row is shown; collapsing the project can remove the highlight. /skin type off removes the type changes.',
+  'After updating Reskin, quit and reopen Claude, apply a skin again, then run /skin type on if you want the type changes.',
+  '',
+  'Every /skin run except /skin about and /skin log is saved for troubleshooting in ~/Library/Logs/Reskin/skin.log (known secret formats removed). /skin log shows the last few.',
   '',
   'Reskin is open source: https://github.com/gregts/reskin-for-claude',
 ].join('\n')
@@ -251,7 +261,7 @@ export function oneClickOf(releaseJson: string | null): boolean {
   if (releaseJson === null) return true
   try { return JSON.parse(releaseJson)?.oneClick === true } catch { return false }
 }
-export const argumentHintOf = (oneClick: boolean) => `[name | off | remove | status | check | list | log | about] [--tick${oneClick ? ' | --one-click' : ''}]`
+export const argumentHintOf = (oneClick: boolean) => `[name | off | remove | status | check | type on|off | list | log | about] [--tick${oneClick ? ' | --one-click' : ''}]`
 
 export function skinSuggestions(text: string, start: number, cursor: number, skins: readonly string[], oneClick = true): Suggestion[] {
   const head = /^\s*\/skin\s+/i.exec(text)

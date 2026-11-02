@@ -425,6 +425,10 @@ const HEALTH_PAGE = `(() => {
   return {
     ready: document.readyState,
     marker: getComputedStyle(html).getPropertyValue('--reskin-active').trim() === '1',
+    typeMarker: getComputedStyle(html).getPropertyValue('--reskin-type').trim() === '1',
+    // Type (numbers only): how many project headers the type sheet's header rule and current-project rule find now.
+    typeHeaders: side ? side.querySelectorAll('.df-label-inset h3 span.inline-block.whitespace-nowrap').length : 0,
+    typeCurrent: (() => { try { return side ? side.querySelectorAll('div.isolate.rounded-lg:has([aria-current=page]) > div > div > .df-label-inset h3 span.inline-block.whitespace-nowrap').length : 0 } catch { return -1 } })(),
     scheme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
     anchors: { root: !!q('.dframe-root'), sidebar: !!side, content: !!q('.dframe-content'), rows: !!(side && side.querySelector('[data-row]')) },
     parts: {
@@ -446,6 +450,129 @@ const HEALTH_PAGE = `(() => {
 // the colour helper (installHelper) calls the same function later, without the debugger.
 const CORE = `const { app, webContents } = ${ELECTRON}
   const st = globalThis.__reskin ?? (globalThis.__reskin = { css: null, keys: new Map(), queues: new Map(), hooks: null, errors: [] })
+  // Type slot (2 Nov 2026): a second, separate sheet (sidebar header type), with its own keys, run number and marker
+  // (--reskin-type). Colour Off leaves it alone; remove and reset clear it. A state left by older code gets it here.
+  st.type ??= { css: null, keys: new Map(), orphans: new Map(), gen: 0 }
+  // dirty: a type sheet may still be on some page (set by every type change, cleared only once a type off is proven on every
+  // page), so a later removal never skips the type cleanup on the strength of empty bookkeeping.
+  const typeDirty = () => st.type.css !== null || st.type.keys.size > 0 || st.type.orphans.size > 0 || st.type.dirty === true
+  st.typeDirty = typeDirty
+  const isClaudePage = w => { try { return !w.isDestroyed() && new URL(w.getURL()).origin === 'https://claude.ai' } catch { return false } }
+  // Reload and new-window hooks, shared by both slots: they stay while either sheet is on. Hooks made by older code
+  // (no v) only put the colours back, so they are replaced.
+  const HOOKS_V = 3
+  st.watch = w => {
+    if (st.hooks.watched.has(w.id)) return
+    const onLoad = () => { st.work = (st.work ?? 0) + 1; if (st.css !== null) void st.put?.(w); if (st.type.css !== null) void st.putType(w) }
+    const onGone = () => { st.keys.delete(w.id); st.queues.delete(w.id); st.type.keys.delete(w.id); st.type.orphans.delete(w.id); st.hooks?.watched.delete(w.id) }
+    w.on('did-finish-load', onLoad)
+    w.once('destroyed', onGone)
+    st.hooks.watched.set(w.id, { w, onLoad, onGone })
+  }
+  st.hookDown = (force = false) => {
+    if (st.hooks !== null && (force || (st.css === null && st.type.css === null))) {
+      app.removeListener('web-contents-created', st.hooks.onCreated)
+      for (const { w, onLoad, onGone } of st.hooks.watched.values()) {
+        if (!w.isDestroyed()) { w.removeListener('did-finish-load', onLoad); w.removeListener('destroyed', onGone) }
+      }
+      st.hooks = null
+    }
+  }
+  st.hookUp = () => {
+    if (st.hooks !== null && st.hooks.v !== HOOKS_V) st.hookDown(true)
+    if ((st.css !== null || st.type.css !== null) && st.hooks === null) {
+      st.hooks = { v: HOOKS_V, watched: new Map(), onCreated: (_e, w) => st.watch(w) }
+      app.on('web-contents-created', st.hooks.onCreated)
+    }
+    if (st.hooks !== null) for (const w of webContents.getAllWebContents()) st.watch(w)
+  }
+  // One type change at a time per window, in the same per-window queue as the colours, so the two never interleave.
+  st.putType = (w, errors = st.type.errors ?? []) => {
+    const id = w.id
+    const T = st.type
+    const gen = T.gen
+    st.work = (st.work ?? 0) + 1
+    const prev = st.queues.get(id) ?? Promise.resolve()
+    const next = prev.then(async () => {
+      if (w.isDestroyed()) { T.keys.delete(id); return }
+      if (T.css !== null && !isClaudePage(w)) return // only the Claude page, like the colours
+      const old = T.keys.get(id)
+      if (T.css === null) {
+        if (old !== undefined) { await w.removeInsertedCSS(old); T.keys.delete(id) }
+        const left = []
+        for (const k of T.orphans.get(id) ?? []) {
+          try { await w.removeInsertedCSS(k) } catch (e) { left.push(k); errors.push('could not remove an old type sheet: ' + String(e)) }
+        }
+        if (left.length > 0) T.orphans.set(id, left); else T.orphans.delete(id)
+        return
+      }
+      // An insert in flight keeps the slot marked as maybe on, and any insert that lands marks it again: nothing may
+      // declare the type sheet gone while one could still arrive (a late insert whose removal silently fails).
+      T.pending = (T.pending ?? 0) + 1
+      T.seq = (T.seq ?? 0) + 1 // every insert ever started: a proof counts only if none started while it ran
+      T.dirty = true
+      let key
+      try { key = await w.insertCSS(T.css + ' html { --reskin-type: 1 !important; }', { cssOrigin: 'author' }) } finally { T.pending-- }
+      T.dirty = true
+      if (w.isDestroyed()) return
+      if (T.gen !== gen) { try { await w.removeInsertedCSS(key) } catch { T.orphans.set(id, [...(T.orphans.get(id) ?? []), key]) } return }
+      T.keys.set(id, key)
+      if (old !== undefined) {
+        try { await w.removeInsertedCSS(old) } catch (e) { T.orphans.set(id, [...(T.orphans.get(id) ?? []), old]); throw e }
+      }
+    }).catch(err => { if (errors.length < 20) errors.push(String(err)) }) // reload re-puts land in the last run's list: keep it small
+      .finally(() => { if (st.queues.get(id) === next) st.queues.delete(id) })
+    st.queues.set(id, next)
+    return next
+  }
+  // st.applyType(css): css null = type off. Proven like the colours: on = the type marker on every Claude page; off =
+  // the marker gone, or that page reloaded (a reload drops every inserted sheet; the hooks put the colours back).
+  st.applyType = async (css) => {
+    const T = st.type
+    T.css = css
+    T.dirty = true
+    const gen = T.gen = T.gen + 1
+    const errors = T.errors = []
+    const within = (p, ms, label) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(label + ' timed out')), ms))])
+    st.hookUp()
+    await within(Promise.all(webContents.getAllWebContents().map(w => st.putType(w, errors))), 3000, 'changing the type sheet').catch(e => errors.push(String(e)))
+    st.hookDown()
+    const marker = w => within(w.executeJavaScriptInIsolatedWorld(4248, [{ code: 'getComputedStyle(document.documentElement).getPropertyValue(' + JSON.stringify('--reskin-type') + ').trim()' }]), 1500, 'reading the type marker')
+    const safeMarker = async w => { for (let i = 0; i < 2; i++) { try { return await marker(w) } catch { if (i === 0) await new Promise(r => setTimeout(r, 300)) } } return 'unknown' }
+    const pages = webContents.getAllWebContents().filter(isClaudePage)
+    let applied = 0, reloaded = 0, leftover = 0, unverified = 0
+    if (css === null) {
+      const quiet = () => ({ pending: T.pending ?? 0, seq: T.seq ?? 0 })
+      const q0 = quiet()
+      await Promise.all(pages.map(async w => {
+        const m = await safeMarker(w)
+        if (m === '1' || m === 'unknown') {
+          if (w.isDestroyed() || !isClaudePage(w) || T.gen !== gen) return
+          await new Promise(resolve => {
+            const done = () => { w.removeListener('did-finish-load', done); resolve() }
+            w.once('did-finish-load', done)
+            setTimeout(done, 3000)
+            w.reload()
+          })
+          reloaded++
+        }
+        const after = await safeMarker(w)
+        if (after === '1') leftover++
+        else if (after !== '') unverified++
+        else if (T.gen === gen) { T.keys.delete(w.id); T.orphans.delete(w.id) } // proven gone: the old keys mean nothing now
+      }))
+      if (leftover > 0) errors.push('the type marker is still on ' + leftover + ' page(s) even after a reload: press Cmd-R in the Claude window')
+      if (unverified > 0) errors.push('could not confirm the type sheet is gone from ' + unverified + ' page(s): press Cmd-R in the Claude window')
+      const q1 = quiet()
+      if (leftover === 0 && unverified === 0 && T.gen === gen && errors.length === 0 && q0.pending === 0 && q1.pending === 0 && q0.seq === q1.seq) T.dirty = false
+    } else {
+      // No Claude window: nothing to show it on, so the request is not kept armed for a later window.
+      if (pages.length === 0) { errors.push('no Claude window is open'); if (T.gen === gen) { T.css = null; st.hookDown() } }
+      await Promise.all(pages.map(async w => { if ((await safeMarker(w)) === '1') applied++ }))
+      if (pages.length > 0 && applied < pages.length) errors.push('the type sheet did not show up on ' + (pages.length - applied) + ' of ' + pages.length + ' Claude page(s)')
+    }
+    return { eligible: pages.length, applied, reloaded, leftover, unverified, errors }
+  }
   st.apply = async (css, reset = false, batch = false, quick = false) => {
     st.css = css
     if (batch) { st.batch = true; st.batchActive = Date.now() } // the colour helper waits while a batch owns the colours
@@ -492,29 +619,9 @@ const CORE = `const { app, webContents } = ${ELECTRON}
       return next
     }
     st.put = put
-    const watch = w => {
-      if (st.hooks.watched.has(w.id)) return
-      const onLoad = () => { st.work = (st.work ?? 0) + 1; void st.put(w) }
-      const onGone = () => { st.keys.delete(w.id); st.queues.delete(w.id); st.hooks?.watched.delete(w.id) }
-      w.on('did-finish-load', onLoad)
-      w.once('destroyed', onGone)
-      st.hooks.watched.set(w.id, { w, onLoad, onGone })
-    }
-    if (st.css !== null && st.hooks === null) {
-      st.hooks = { watched: new Map(), onCreated: (_e, w) => watch(w) }
-      app.on('web-contents-created', st.hooks.onCreated)
-    }
-    if (st.hooks !== null) for (const w of webContents.getAllWebContents()) watch(w)
+    st.hookUp()
     st.errors = errors
-    const teardownHooks = () => {
-      if (st.css === null && st.hooks !== null) {
-        app.removeListener('web-contents-created', st.hooks.onCreated)
-        for (const { w, onLoad, onGone } of st.hooks.watched.values()) {
-          if (!w.isDestroyed()) { w.removeListener('did-finish-load', onLoad); w.removeListener('destroyed', onGone) }
-        }
-        st.hooks = null
-      }
-    }
+    const teardownHooks = () => st.hookDown() // kept while the type sheet is on, so a reload puts it back
     // A reset must not wait behind a stuck insert: hooks go first, and the queues are not awaited.
     if (reset) teardownHooks()
     else { await within(Promise.all(webContents.getAllWebContents().map(put)), 3000, 'changing the stylesheets').catch(e => errors.push(String(e))); teardownHooks() }
@@ -572,18 +679,47 @@ const CORE = `const { app, webContents } = ${ELECTRON}
     // A page that is loading (or cannot say) makes the look unstable; its address is part of the look, so a navigation that
     // starts during the read is caught after it.
     const loading = w => { try { return typeof w.isLoading !== 'function' || w.isLoading() } catch { return true } }
-    const look = () => { const ws = webContents.getAllWebContents().filter(isClaude); return { gen: st.gen ?? 0, work: st.work ?? 0, css: st.css, queued: st.queues.size, ids: ws.map(w => w.id + ' ' + w.getURL()).sort().join(','), loading: ws.some(loading) } }
+    const look = () => { const ws = webContents.getAllWebContents().filter(isClaude); return { gen: st.gen ?? 0, work: st.work ?? 0, css: st.css, type: st.type?.css ?? null, queued: st.queues.size, ids: ws.map(w => w.id + ' ' + w.getURL()).sort().join(','), loading: ws.some(loading) } }
     const before = look()
     const pages = await Promise.all(webContents.getAllWebContents().filter(isClaude).map(w => within(w.executeJavaScriptInIsolatedWorld(4247, [{ code: ${JSON.stringify(HEALTH_PAGE)} }]), 1500).catch(() => ({ error: 'unreadable' }))))
     const after = look()
-    const stable = !before.loading && !after.loading && before.queued === 0 && after.queued === 0 && before.gen === after.gen && before.work === after.work && before.css === after.css && before.ids === after.ids && pages.every(p => p.error || p.ready === 'complete')
+    const stable = !before.loading && !after.loading && before.queued === 0 && after.queued === 0 && before.gen === after.gen && before.work === after.work && before.css === after.css && before.type === after.type && before.ids === after.ids && pages.every(p => p.error || p.ready === 'complete')
     return { stable, pages }
   }`
 
-function setCode(css, reset = false, batch = false, quick = false) {
-  return `(async () => {
+// `all` (remove and reset only): the type sheet goes too. A batch's final Off, like the helper's Off, leaves it alone.
+function setCode(css, reset = false, batch = false, quick = false, all = false) {
+  if (!all) return `(async () => {
   ${CORE}
   return st.apply(${JSON.stringify(css)}, ${reset}, ${batch}, ${quick})
+})()`
+  return `(async () => {
+  ${CORE}
+  const within = (p, ms, label) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(label + ' timed out')), ms))])
+  const T = st.type
+  if (${reset}) {
+    // The reset reloads every Claude page; afterwards the type marker must be gone too, page by page.
+    T.css = null; T.dirty = true
+    const tgen = ++T.gen
+    const res = await st.apply(${JSON.stringify(css)}, true, ${batch}, ${quick})
+    const read = w => within(w.executeJavaScriptInIsolatedWorld(4248, [{ code: 'getComputedStyle(document.documentElement).getPropertyValue(' + JSON.stringify('--reskin-type') + ').trim()' }]), 1500, 'reading the type marker').catch(() => 'unknown')
+    let left = 0
+    const clean = []
+    const p0 = T.pending ?? 0, s0 = T.seq ?? 0 // the proof counts only if no insert is in flight or starts while it runs
+    for (const w of webContents.getAllWebContents().filter(isClaudePage)) { if ((await read(w)) === '') clean.push(w.id); else left++ }
+    if (T.gen !== tgen) return res // a newer type change took over meanwhile: its own proof counts, and its keys stay
+    for (const id of clean) { T.keys.delete(id); T.orphans.delete(id) }
+    if (left === 0 && p0 === 0 && (T.pending ?? 0) === 0 && (T.seq ?? 0) === s0) T.dirty = false
+    if (left > 0) res.errors = [...res.errors, 'could not confirm the type sheet is gone from ' + left + ' page(s): press Cmd-R in the Claude window']
+    return res
+  }
+  // Both slots are claimed before the first wait (each run numbers itself at once), so a newer apply that starts
+  // meanwhile is the one that counts, and this removal never undoes it.
+  const typeOff = typeDirty() ? within(st.applyType(null), 6000, 'type off').then(r => r.errors, e => [String(e)]) : Promise.resolve([])
+  const res = await st.apply(${JSON.stringify(css)}, false, ${batch}, ${quick})
+  const typeErrors = await typeOff
+  if (typeErrors.length > 0) res.errors = [...typeErrors, ...res.errors]
+  return res
 })()`
 }
 
@@ -595,6 +731,7 @@ function setCode(css, reset = false, batch = false, quick = false) {
 // network. Its file checks catch accidents and stale files; any program running as the user could still ask it to switch.
 export function installHelper(st, o) {
   const { fs, dir, presets } = o
+  const typeSheets = o.typeSheets ?? {} // name -> checked type sheet (fixed at injection): today only 'on'
   const C = fs.constants
   const at = (n) => dir + '/' + n
   const MAX = 4096
@@ -619,7 +756,7 @@ export function installHelper(st, o) {
     try { fs.renameSync(tmp, at(name)) } catch (e) { try { fs.unlinkSync(tmp) } catch {} throw e }
   }
   const h = { session: o.randomUUID(), last: 0, requests: 0, ignored: 0, running: false, again: false, stopped: false, watcher: null, timer: null, ino: d0.ino, badKey: null, startedAt: o.now() }
-  const sessionInfo = () => ({ v: 1, session: h.session, pid: o.pid, boot: o.boot, version: o.version, startedAt: h.startedAt, caps: ['check'], gen: o.gen })
+  const sessionInfo = () => ({ v: 1, session: h.session, pid: o.pid, boot: o.boot, version: o.version, startedAt: h.startedAt, caps: Object.hasOwn(typeSheets, 'on') ? ['check', 'type'] : ['check'], gen: o.gen })
   const watch = () => {
     try { h.watcher?.close() } catch {}
     h.watcher = null
@@ -656,7 +793,7 @@ export function installHelper(st, o) {
     if (!Number.isSafeInteger(j.nonce) || j.nonce < 1) return bad('nonce is not a positive whole number')
     if (j.nonce === h.last) return { none: true } // already handled
     if (j.nonce < h.last) return bad('an old request')
-    if (typeof j.action !== 'string' || !(j.action === 'off' || j.action === 'remove' || j.action === 'check' || Object.hasOwn(presets, j.action))) return bad('not a preset name, off, remove or check')
+    if (typeof j.action !== 'string' || !(j.action === 'off' || j.action === 'remove' || j.action === 'check' || (j.action === 'type-on' && Object.hasOwn(typeSheets, 'on')) || j.action === 'type-off' /* always: a cleanup that only removes */ || Object.hasOwn(presets, j.action))) return bad('not a preset name, off, remove, check, type-on or type-off')
     return { req: j }
   }
   const ack = (r) => {
@@ -694,7 +831,9 @@ export function installHelper(st, o) {
       let dark = null, digest = null
       try { dark = o.dark() } catch {}
       try { digest = st.css === null ? null : o.digest(st.css) } catch {}
-      ack({ nonce: j.nonce, action: 'check', phase: 'done', ok: sample !== null, errors, current: name, digest, dark, sample })
+      const T = st.type
+      const type = !T || T.css === null ? 'off' : T.css === typeSheets.on ? 'on' : 'unknown'
+      ack({ nonce: j.nonce, action: 'check', phase: 'done', ok: sample !== null, errors, current: name, digest, dark, sample, type })
       return
     }
     if (j.action === 'remove') {
@@ -702,17 +841,31 @@ export function installHelper(st, o) {
       ack({ nonce: j.nonce, action: 'remove', phase: 'accepted', ok: true, errors: [] })
       stop(true)
       let res
+      // Both sheets go (a removal leaves nothing of Reskin behind). Both runs number themselves before their first wait,
+      // so a newer apply that starts meanwhile is never undone by this removal.
+      const typeOn = typeof st.applyType === 'function' && typeof st.typeDirty === 'function' && st.typeDirty() // never used, or proven off: nothing to take off
+      const typeOff = typeOn ? within(st.applyType(null), 6_000).then((r) => r.errors, (e) => [String(e)]) : Promise.resolve([])
+      const typeGen = st.type?.gen
       const off = st.apply(null)
       const gen = st.gen // this removal's own run: st.apply numbers each run before its first wait
       try { res = await within(off, 12_000) } catch (e) { res = { errors: [String(e)] } }
-      const errors = (res?.errors ?? []).slice(0, 5).map(String)
+      const typeErrors = await typeOff
+      const errors = [...typeErrors, ...(res?.errors ?? [])].slice(0, 5).map(String)
       // The state goes only if nothing newer has started since (a newer apply may not have installed its helper yet).
       // The debugger's own close timer (__reskinFallback) belongs to debugger runs and is never touched here.
-      if (errors.length === 0 && st.gen === gen && !st.helper && globalThis.__reskin === st) delete globalThis.__reskin
+      if (errors.length === 0 && st.gen === gen && st.type?.gen === typeGen && !st.helper && globalThis.__reskin === st) delete globalThis.__reskin
       // The final answer: removal done, or what went wrong (the client reports success only on this). Not when a newer
       // helper took over meanwhile: its acks are the only ones that count now.
       if (st.helper && st.helper !== h) return
       ack({ nonce: j.nonce, action: 'remove', phase: 'done', ok: errors.length === 0, errors })
+      return
+    }
+    if (j.action === 'type-on' || j.action === 'type-off') {
+      // The type slot only: the colours are not touched. No samples (the colour checks belong to colour changes).
+      let res
+      try { res = typeof st.applyType === 'function' ? await within(st.applyType(j.action === 'type-on' ? typeSheets.on : null), 8_000) : { errors: ['this Claude has no type slot yet'] } } catch (e) { res = { errors: [String(e)] } }
+      if (h.stopped) return
+      ack({ nonce: j.nonce, action: j.action, phase: 'done', ok: (res?.errors ?? []).length === 0, errors: (res?.errors ?? []).slice(0, 5).map(String), applied: res?.applied ?? 0, eligible: res?.eligible ?? 0, reloaded: res?.reloaded ?? 0 })
       return
     }
     let res
@@ -748,7 +901,7 @@ export function installHelper(st, o) {
 // Claude's start time (23 Oct 2026): process.uptime() stops while the Mac sleeps, so "now minus uptime" came out late
 // by the sleep time and a later status took the live helper for a restarted Claude. Electron's own process creation
 // time is wall-clock and matches ps; the old reading stays only as a fallback.
-function helperCode(presets, dir) {
+function helperCode(presets, dir, typeSheets = {}) {
   return `(async () => {
   ${CORE}
   const bootMs = () => {
@@ -758,6 +911,7 @@ function helperCode(presets, dir) {
   const o = {
     fs: process.getBuiltinModule('fs'), dir: ${JSON.stringify(dir)},
     presets: Object.freeze(Object.assign(Object.create(null), ${JSON.stringify(presets)})),
+    typeSheets: Object.freeze(Object.assign(Object.create(null), ${JSON.stringify(typeSheets)})),
     uid: process.getuid(), pid: process.pid, boot: bootMs(), version: app.getVersion(), gen: ${HELPER_GEN},
     randomUUID: () => process.getBuiltinModule('crypto').randomUUID(), now: Date.now, app,
     digest: (s) => process.getBuiltinModule('crypto').createHash('sha256').update(s).digest('hex'),
@@ -817,6 +971,260 @@ const SELFTEST = `(async () => {
 
 const THEME = `(() => ${ELECTRON}.nativeTheme.shouldUseDarkColors)()`
 const VERSION = `(() => ${ELECTRON}.app.getVersion())()`
+// Read-only text census of the sidebar (fonts and sizes, 2 Nov 2026): which sidebar elements draw text, at what size,
+// weight and font, and how the rows are built, so a later type sheet can name exact selectors. Privacy: built so that
+// names the user chose stay out (only a name made entirely of the fixed interface words below could pass). No text (only its length), no URL, no inline style text; attribute names and values,
+// class names, token names and font names only from fixed lists or fixed shapes, everything else masked as '?'.
+// Bounded: at most 4000 sidebar elements, 30000 style rules and 400 ms of work per window; it says when it stopped early.
+// Its output is privacy-reduced, not anonymous: text lengths, positions, row counts, which project is open and the
+// selected row's path remain. Read it before sharing it, and use made-up sessions for anything public. Developer copy
+// only: a release copy refuses this mode.
+// The page code below passes through two template strings, so it uses no backslashes at all.
+const TYPE_PROBE = `(async () => {
+  const { webContents } = ${ELECTRON}
+  const all = webContents.getAllWebContents()
+  const out = []
+  for (const w of all.slice(0, 6)) {
+    let origin = ''
+    try { origin = new URL(w.getURL()).origin } catch {}
+    const row = { id: w.id, type: w.getType() }
+    if (origin === 'https://claude.ai') {
+      row.page = await Promise.resolve().then(() => w.executeJavaScriptInIsolatedWorld(4243, [{ code: \`(() => {
+        const t0 = performance.now()
+        const late = () => performance.now() - t0 > 400
+        const truncated = new Set()
+        const only = (s, ok) => { for (const ch of s) if (!ok.includes(ch)) return false; return true }
+        const LOW = 'abcdefghijklmnopqrstuvwxyz'
+        const DIG = '0123456789'
+        const ROLES = ['button', 'link', 'treeitem', 'tree', 'group', 'list', 'listitem', 'heading', 'navigation', 'menu', 'menuitem', 'region', 'tab', 'tablist', 'separator', 'img', 'presentation', 'none', 'status', 'tooltip', 'option', 'listbox', 'complementary']
+        const ENUM = ['true', 'false', 'open', 'closed', 'on', 'off', 'page', 'active', 'inactive', 'checked', 'unchecked', 'mixed', 'horizontal', 'vertical', '']
+        const NAMES = ['role', 'aria-expanded', 'aria-selected', 'aria-current', 'aria-level', 'aria-hidden', 'aria-disabled', 'aria-orientation', 'aria-label', 'aria-labelledby', 'aria-controls', 'aria-haspopup', 'aria-describedby', 'data-state', 'data-orientation', 'data-side', 'data-disabled', 'data-selected', 'data-active', 'data-font', 'data-cds', 'data-row', 'data-slot', 'data-variant', 'data-size', 'data-kind', 'data-section', 'data-group', 'data-collapsed', 'data-expanded', 'data-highlighted', 'data-testid', 'data-index', 'data-level', 'data-depth', 'data-type', 'data-theme', 'data-mode']
+        const CDS = ['Icon', 'Pulse', 'Text', 'Button', 'IconButton', 'Row', 'Stack', 'Box', 'Tooltip', 'Spinner', 'Badge', 'Chevron', 'Disclosure', 'Heading', 'Label', 'Avatar', 'Menu', 'MenuItem', 'Collapsible', 'Link', 'Kbd', 'Divider', 'Separator', 'Popover', 'Truncate', 'ListItem', 'List', 'Section', 'Group', 'Header', 'Title']
+        const VALUED = ['data-variant', 'data-size', 'data-kind', 'data-type', 'data-level', 'data-depth', 'data-index', 'aria-level', 'data-slot', 'data-section', 'data-group']
+        const attrsOf = (el) => [...el.attributes].filter(a => a.name === 'role' || a.name.startsWith('aria-') || a.name.startsWith('data-')).slice(0, 14).map(a => {
+          if (!NAMES.includes(a.name)) return a.name.startsWith('aria-') ? 'aria-?' : 'data-?'
+          const v = a.value
+          if (a.name === 'role') return ROLES.includes(v) ? 'role=' + v : 'role=?'
+          if (a.name === 'data-cds') return CDS.includes(v) ? 'data-cds=' + v : 'data-cds=?'
+          if (a.name === 'data-font') return ['system', 'sans', 'serif', 'dyslexic', 'mono'].includes(v) ? 'data-font=' + v : 'data-font=?'
+          if (ENUM.includes(v)) return a.name + '=' + v
+          if (VALUED.includes(a.name) && v.length <= 2 && only(v, DIG)) return a.name + '=' + v
+          return a.name + '=#' + v.length
+        }).join(' ')
+        // Class names, token names and tag names: kept only when every part is a known word, a number or a checked
+        // [value]; anything else is masked as '?'.
+        const SUF = ('xs sm md lg xl 2xl 3xl 4xl base full auto none px screen min max fit center start end between around evenly stretch baseline x y t b l r s e w h col row wrap nowrap reverse hidden visible scroll clip ellipsis medium semibold bold normal light thin extralight extrabold black tight snug relaxed loose wide wider widest tighter primary secondary tertiary quaternary muted subtle inverse accent danger warning success info always transparent current inherit white solid dashed dotted double colors opacity shadow all default pointer text grab move not allowed help inset sans serif mono italic underline through offset events spacing cols rows span pre line break words keep anywhere balance pretty clamp size flex grow shrink basis items self content justify place sidebar root body group header label title item leading tail mark slot section frame list icon chevron pane panel nav main inner outer wrapper container area heading toggle button link badge dot status gray grey neutral red blue green amber yellow orange purple pink fg bg border ring out in linear middle top bottom left right inside outside both fixed local hover selected active disabled focus pressed surface fill stroke raised sunken overlay elevated canvas page strong weak faint pt pb pl pr indent gap font tracking decoration lh inline block grid table contents flow only sr italic case lowercase uppercase capitalize events select resize touch manipulation pan antialiased subpixel tabular nums proportional slashed ordinal z transform gpu will change contain layout paint strict isolate isolation object cover fill scale rotate translate skew origin cursor ease duration delay animate spin ping pulse bounce blur backdrop filter radius rounded outline appearance list disc decimal float clear box border-box aspect video square snap scrollbar overscroll overflow whitespace hyphens indent align vertical sub super divide space order truncate line letter webkit moz pill control hub rail new circle card composition view slider dot status forced chip tag menu popover tooltip dialog sheet drawer close open expand collapse caret arrow count meta subtitle caption hint').split(' ')
+        const FIRST = ['text', 'font', 'flex', 'inline', 'block', 'grid', 'hidden', 'items', 'justify', 'self', 'place', 'content', 'gap', 'p', 'px', 'py', 'pt', 'pb', 'pl', 'pr', 'ps', 'pe', 'm', 'mx', 'my', 'mt', 'mb', 'ml', 'mr', 'ms', 'me', 'w', 'h', 'min', 'max', 'size', 'rounded', 'border', 'bg', 'leading', 'tracking', 'truncate', 'overflow', 'shrink', 'grow', 'basis', 'relative', 'absolute', 'sticky', 'fixed', 'static', 'top', 'left', 'right', 'bottom', 'inset', 'z', 'opacity', 'select', 'cursor', 'group', 'peer', 'transition', 'duration', 'ease', 'delay', 'whitespace', 'uppercase', 'lowercase', 'capitalize', 'normal', 'italic', 'not', 'underline', 'no', 'decoration', 'tabular', 'line', 'translate', 'origin', 'pointer', 'outline', 'ring', 'shadow', 'space', 'divide', 'order', 'col', 'row', 'transform', 'will', 'contain', 'isolate', 'antialiased', 'subpixel', 'break', 'sr', 'visible', 'invisible', 'dframe', 'df', 'cds', 'fill', 'stroke', 'aspect', 'object', 'scroll', 'snap', 'touch', 'appearance', 'list', 'align', 'float', 'clear', 'box', 'filter', 'backdrop', 'blur', 'animate', 'rotate', 'scale', 'contents', 'flow', 'container', 'caret', 'accent', 'placeholder', 'resize', 'hyphens', 'indent', 'clip', 'mask', 'table', 'shrink', 'overscroll', 'vertical', 'tw', 'status', 'composition', 'slider', 'forced']
+        const VARS = ['hover', 'focus', 'focus-visible', 'focus-within', 'active', 'disabled', 'enabled', 'visited', 'checked', 'first', 'last', 'odd', 'even', 'only', 'empty', 'placeholder', 'before', 'after', 'selection', 'marker', 'dark', 'light', 'sm', 'md', 'lg', 'xl', '2xl', 'rtl', 'ltr', 'motion-safe', 'motion-reduce', 'print', 'open', 'group-hover', 'group-focus', 'group-focus-within', 'group-focus-visible', 'group-active', 'peer-hover', 'peer-focus', 'peer-checked', 'aria-expanded', 'aria-selected', 'aria-current', 'aria-disabled', 'aria-checked', 'not-first', 'not-last']
+        const KEYS = ['state', 'selected', 'active', 'highlighted', 'disabled', 'side', 'orientation', 'expanded', 'collapsed', 'current', 'open']
+        const numOk = (p) => p !== '' && only(p, DIG + './')
+        const partsOk = (parts) => parts.every(p => numOk(p) || SUF.includes(p))
+        // A token name: a known family start and every later part a known word or number (no free names).
+        const varOk = (n) => n.length <= 48 && n.startsWith('--') && only(n, LOW + DIG + '-') && (() => { const p = n.slice(2).split('-'); return ['df', 'cds', 'tw', 'spacing', 'text', 'font', 'radius', 'leading', 'tracking'].includes(p[0]) && partsOk(p.slice(1).filter(x => x !== '')) })()
+        const BR = LOW + DIG + '-.%(),:+*/ '
+        // Numbers with a complete unit (or none), operators, parentheses and calc/min/max/clamp: nothing else.
+        const UNITS = ['px', 'rem', 'em', '%', 'vh', 'vw', 'dvh', 'svh', 'ch', 'fr', 'ms', 's', 'deg']
+        const numExpr = (x) => {
+          let i = 0
+          let any = false
+          while (i < x.length) {
+            const ch = x[i]
+            if (' (),+*/-'.includes(ch)) { i++; continue }
+            if ((DIG + '.').includes(ch)) {
+              let j = i
+              while (j < x.length && (DIG + '.').includes(x[j])) j++
+              const n = x.slice(i, j)
+              if (n === '.' || n.split('.').length > 2) return false
+              let k = j
+              while (k < x.length && (LOW + '%').includes(x[k])) k++
+              if (k > j && !UNITS.includes(x.slice(j, k))) return false
+              any = true
+              i = k
+              continue
+            }
+            if (LOW.includes(ch)) {
+              let j = i
+              while (j < x.length && LOW.includes(x[j])) j++
+              if (!['calc', 'min', 'max', 'clamp'].includes(x.slice(i, j)) || x[j] !== '(') return false
+              i = j
+              continue
+            }
+            return false
+          }
+          return any
+        }
+        // Inside [ ]: an optional length: or color: hint, then only numbers, units, calc/min/max/clamp and var() of a
+        // checked token name. No other letters, so no name can ride along.
+        const bracketOk = (b) => {
+          let x = b.startsWith('length:') ? b.slice(7) : b.startsWith('color:') ? b.slice(6) : b
+          if (!only(x, BR)) return false
+          for (const v of x.split('var(').slice(1)) { const n = v.split(')')[0].split(',')[0]; if (!varOk(n)) return false; x = x.replace('var(' + n, '(0') }
+          for (const f of ['calc', 'min', 'max', 'clamp']) x = x.split(f + '(').join('(')
+          return numExpr(x)
+        }
+        // Split on ':' outside [ ] only (text-[length:var(--x)] is one utility).
+        const splitTop = (c) => { const out = []; let cur = ''; let depth = 0; for (const ch of c) { if (ch === '[') depth++; if (ch === ']') depth--; if (ch === ':' && depth === 0) { out.push(cur); cur = '' } else cur += ch } out.push(cur); return out }
+        const variantOk = (v) => {
+          if (VARS.includes(v)) return true
+          const i = v.indexOf('[')
+          if (i < 0 || !v.endsWith(']') || !['data-', 'group-data-', 'peer-data-', 'aria-', 'group-aria-'].includes(v.slice(0, i))) return false
+          const kv = v.slice(i + 1, -1).split('=')
+          return kv.length <= 2 && KEYS.includes(kv[0]) && (kv.length === 1 || ENUM.includes(kv[1]))
+        }
+        const utilOk = (u) => {
+          let x = u.startsWith('!') ? u.slice(1) : u
+          if (x.startsWith('-')) x = x.slice(1)
+          let br = null
+          const i = x.indexOf('[')
+          if (i >= 0) { if (!x.endsWith(']') || x[i - 1] !== '-') return false; br = x.slice(i + 1, -1); x = x.slice(0, i - 1) }
+          if (br !== null && !bracketOk(br)) return false
+          const parts = x.split('-')
+          return FIRST.includes(parts[0]) && partsOk(parts.slice(1))
+        }
+        const classOk = (c) => {
+          if (c.length > 90 || !only(c, LOW + DIG + '-_:./%[]()&>*!@=+,#')) return false
+          const seg = splitTop(c)
+          return seg.slice(0, -1).every(variantOk) && utilOk(seg[seg.length - 1])
+        }
+        const clsOf = (el) => String(el.className && el.className.baseVal !== undefined ? el.className.baseVal : el.className).split(' ').filter(Boolean).slice(0, 30).map(c => classOk(c) ? c : '?').join(' ')
+        const FAMS = ['system-ui', '-apple-system', 'BlinkMacSystemFont', '.SF NS', 'SF Pro', 'SF Pro Text', 'SF Pro Display', 'SF Mono', 'Anthropic Sans', 'Anthropic Serif', 'Anthropic Mono', 'Anthropicons-Variable', 'Copernicus', 'Styrene B', 'Tiempos Text', 'ui-sans-serif', 'ui-serif', 'ui-monospace', 'sans-serif', 'serif', 'monospace', 'Menlo', 'Monaco', 'Consolas', 'Inter', 'Helvetica Neue', 'Helvetica', 'Arial', 'Segoe UI', 'Roboto', 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'OpenDyslexic', 'emoji']
+        // Font and size tokens looked for, by exact name only; other --df-* names are only counted.
+        const TOKS = ['--df-group-font', '--df-group-pt', '--df-group-pb', '--df-group-h', '--df-group-weight', '--df-group-px', '--df-group-gap', '--df-row-font', '--df-row-h', '--df-row-px', '--df-row-gap', '--df-row-indent', '--df-row-weight', '--df-section-font', '--df-header-font', '--df-label-font', '--df-title-font', '--df-font', '--cds-font-sans', '--cds-font-serif', '--cds-font-mono', '--cds-font-ui', '--cds-font-system', '--cds-font-display', '--font-sans', '--font-serif', '--font-mono', '--font-ui', '--font-system', '--font-display', '--font-heading', '--font-body', '--text-xs', '--text-sm', '--text-base', '--text-lg', '--text-xs--line-height', '--text-sm--line-height', '--text-base--line-height', '--font-weight-normal', '--font-weight-medium', '--font-weight-semibold', '--font-weight-bold']
+        const tokOk = (n) => TOKS.includes(n)
+        const TAGS = ['div', 'span', 'a', 'button', 'p', 'li', 'ul', 'ol', 'nav', 'aside', 'section', 'header', 'footer', 'main', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'label', 'input', 'textarea', 'svg', 'path', 'g', 'small', 'strong', 'b', 'em', 'i', 'img', 'details', 'summary', 'time', 'kbd', 'code', 'pre', 'form', 'select', 'option', 'hr', 'abbr', 'mark', 'figure', 'table', 'tr', 'td', 'th', 'tbody', 'thead', 'dl', 'dt', 'dd', 'use', 'circle', 'rect', 'line', 'polyline', 'polygon']
+        const tagOf = (el) => pick(el.tagName.toLowerCase(), TAGS)
+        const famOf = (f) => f.split(',').slice(0, 12).map(x => x.trim().replace(/^["']|["']$/g, '')).map(x => FAMS.includes(x) ? x : x.startsWith('var(') && x.endsWith(')') && varOk(x.slice(4, -1)) ? x : '?').join(', ')
+        const pxOk = (v) => v.endsWith('px') && v.length <= 12 && only(v.slice(0, -2), DIG + '.-')
+        const px = (v) => pxOk(v) || ['', 'auto', 'normal', 'none'].includes(v) ? v : '?'
+        const num = (v) => v.length <= 8 && only(v, DIG + '.') ? v : '?'
+        const pick = (v, list) => list.includes(v) ? v : '?'
+        const box = (el) => { const r = el.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height), x: Math.round(r.x), y: Math.round(r.y) } }
+        const geo = (el) => { const c = getComputedStyle(el); const tf = el.style.transform; return { pos: pick(c.position, ['static', 'relative', 'absolute', 'fixed', 'sticky']), height: px(c.height), minH: px(c.minHeight), maxH: px(c.maxHeight), line: px(c.lineHeight), overflowY: pick(c.overflowY, ['visible', 'hidden', 'clip', 'scroll', 'auto']), inlineH: px(el.style.height), inlineTop: px(el.style.top), inlineTransform: tf === '' ? '' : tf.startsWith('translateY(') && tf.endsWith('px)') && only(tf.slice(11, -3), DIG + '.-') ? tf : '?' } }
+        const desc = (el) => { const a = attrsOf(el); return tagOf(el) + (a ? '[' + a + ']' : '') + '.' + clsOf(el) }
+        const side = document.querySelector('.dframe-sidebar')
+        if (!side) return { code: 'no-sidebar' }
+        const ownLen = (el) => { let n = 0; for (const x of el.childNodes) if (x.nodeType === 3) n += x.textContent.trim().length; return n }
+        const groups = new Map()
+        let visited = 0
+        const rowsSeen = new Set()
+        let expanded = 0
+        const walker = document.createTreeWalker(side, 1)
+        for (let el = walker.nextNode(); el; el = walker.nextNode()) {
+          if (++visited > 4000) { truncated.add('elements'); break }
+          if (late()) { truncated.add('time'); break }
+          if (el.getAttribute('aria-expanded') === 'true') expanded++
+          const len = ownLen(el)
+          if (len === 0) continue
+          const c = getComputedStyle(el)
+          if (c.display === 'none' || c.visibility === 'hidden' || el.getClientRects().length === 0) continue
+          // A session row: visible text inside a [data-row] element.
+          if (el.closest('[data-row]')) rowsSeen.add(el.closest('[data-row]'))
+          const key = [el.tagName, c.fontSize, c.fontWeight, famOf(c.fontFamily), clsOf(el), attrsOf(el)].join('|')
+          const g = groups.get(key)
+          if (g) { g.n++; if (g.lens.length < 40) g.lens.push(len); continue }
+          if (groups.size >= 120) { truncated.add('groups'); continue }
+          const anc = []
+          for (let e = el.parentElement, i = 0; e && e !== side && i < 7; e = e.parentElement, i++) anc.push({ el: desc(e), box: box(e), geo: geo(e) })
+          groups.set(key, {
+            n: 1, lens: [len], el: desc(el),
+            font: { size: px(c.fontSize), weight: num(c.fontWeight), family: famOf(c.fontFamily), line: px(c.lineHeight), spacing: px(c.letterSpacing), transform: pick(c.textTransform, ['none', 'uppercase', 'lowercase', 'capitalize']), style: pick(c.fontStyle, ['normal', 'italic', 'oblique']) },
+            opacity: num(c.opacity), clip: pick(c.textOverflow, ['clip', 'ellipsis']), wrap: pick(c.whiteSpace, ['normal', 'nowrap', 'pre', 'pre-wrap', 'pre-line', 'break-spaces']),
+            box: box(el), geo: geo(el), hasIcon: !!(el.parentElement && el.parentElement.querySelector('svg, [data-cds=Icon]')), anc,
+          })
+        }
+        // Token names come from Claude's stylesheets (fixed families only); values are read inside the sidebar.
+        const names = new Set(['--df-group-font', '--df-group-pt', '--df-row-font', '--df-row-h', '--df-row-px', '--df-row-gap', '--df-row-indent'])
+        let rules = 0
+        const dfOther = new Set()
+        const walk = (list, d) => {
+          if (d > 8) return
+          for (const r of list) {
+            if (++rules > 30000) { truncated.add('rules'); return }
+            if (late()) { truncated.add('time'); return }
+            try { if (r.cssRules) walk(r.cssRules, d + 1); const s = r.style; if (!s) continue; for (let i = 0; i < s.length && i < 400; i++) { if (late()) { truncated.add('time'); return } if (tokOk(s[i])) names.add(s[i]); else if (s[i].startsWith('--df-')) dfOther.add(s[i]) } } catch {}
+          }
+        }
+        for (const sh of document.styleSheets) { if (truncated.has('rules') || truncated.has('time')) break; try { walk(sh.cssRules, 0) } catch {} }
+        const sideCs = getComputedStyle(side)
+        const val = (v) => { const x = v.trim(); if (x === '') return x; if (x.startsWith('var(') && x.endsWith(')') && varOk(x.slice(4, -1))) return x; if (x.length <= 120 && bracketOk(x)) return x; if (x.includes(',') || FAMS.includes(x)) return famOf(x); return '?' }
+        const tokens = [...names].sort().map(v => [v, val(sideCs.getPropertyValue(v))]).filter(([, x]) => x !== '').slice(0, 150).map(([k, x]) => k + ': ' + x)
+        const sample = (sel) => { const e = document.querySelector(sel); if (!e) return null; const c = getComputedStyle(e); return { size: px(c.fontSize), weight: num(c.fontWeight), family: famOf(c.fontFamily) } }
+        const route = location.pathname.split('/')[1] || ''
+        // Selection (2 Nov 2026): which fixed candidate rule picks out exactly the header of the project that holds the
+        // open chat. Numbers only: match counts, enum attribute value counts, true/false checks and masked paths. It runs
+        // only when the whole sidebar fitted inside the 4000-element walk above (so every query is over a bounded tree),
+        // checks the time budget before and after every query and step, and marks 'selection' in truncated when it stops.
+        const H = '.df-label-inset h3 span.inline-block.whitespace-nowrap'
+        const SELS = ['[data-selected=open]', '[aria-current=page]', '[aria-current=true]', '[aria-selected=true]', '[data-active=true]', '[data-state=active]']
+        const q = (sel) => { try { return side.querySelectorAll(sel) } catch { return null } }
+        let cut = false
+        const stop = () => { if (cut || late()) { cut = true; truncated.add('selection') } return cut }
+        const idxOf = (e) => { let n = 0; for (let x = e.previousElementSibling; x && n < 200; x = x.previousElementSibling) n++; return n }
+        const selection = { headers: null, markers: {} }
+        if (truncated.has('elements')) truncated.add('selection')
+        else if (!stop()) {
+          const hs = q(H)
+          selection.headers = hs ? hs.length : -1
+          for (const sx of SELS) {
+            if (stop()) break
+            const els = q(sx)
+            if (stop()) break
+            if (els === null) { selection.markers[sx] = { error: true }; continue }
+            const m = { count: els.length, sampled: Math.min(els.length, 50), rows: 0, values: {} } // rows and values cover the first 'sampled' matches only
+            const name = sx.slice(1, sx.indexOf('='))
+            for (let k = 0; k < els.length && k < 50; k++) { if (els[k].hasAttribute('data-row')) m.rows++; const v = pick(els[k].getAttribute(name), ENUM); m.values[v] = (m.values[v] || 0) + 1 }
+            let first = els[0] || null
+            for (let k = 0; k < els.length && k < 50; k++) if (els[k].hasAttribute('data-row')) { first = els[k]; break }
+            // The owning header: walk up from the first marked row (or element) to the first ancestor holding a header.
+            let top = null
+            m.up = []
+            for (let e = first; e && e !== side && m.up.length < 12; e = e.parentElement) {
+              if (stop()) break
+              const inside = e.querySelectorAll('.df-label-inset').length
+              if (stop()) break
+              const headerChild = !!e.querySelector(':scope > .df-label-inset')
+              if (stop()) break
+              m.up.push({ el: desc(e), idx: idxOf(e), sibs: e.parentElement ? e.parentElement.childElementCount : 0, headerChild, headersInside: inside })
+              if (inside > 0) { top = e; break }
+            }
+            if (stop()) { selection.markers[sx] = m; break }
+            const owners = top ? top.querySelectorAll(H) : []
+            if (stop()) { selection.markers[sx] = m; break }
+            const expected = owners.length === 1 ? owners[0] : null
+            m.ownerHeaders = owners.length
+            m.down = []
+            if (top) { const hdr = top.querySelector('.df-label-inset'); for (let e = hdr; e && e !== top && m.down.length < 8; e = e.parentElement) m.down.unshift(desc(e)) }
+            m.cands = {}
+            const paths = ['', 'div > ', 'div > div > ', 'div > div > div > ']
+            for (let d = 0; d < paths.length; d++) {
+              if (stop()) break
+              const got = q('div:has(> ' + paths[d] + '.df-label-inset):has(' + sx + ') > ' + paths[d] + H)
+              if (stop()) break
+              m.cands['d' + d] = got === null ? { n: -1 } : { n: got.length, exact: expected !== null && got.length === 1 && got[0] === expected }
+            }
+            selection.markers[sx] = m
+          }
+          stop() // a query that ran past the budget still marks the section incomplete
+        }
+        return {
+          code: 'ok', ms: Math.round(performance.now() - t0), truncated: [...truncated], visited, dataRows: rowsSeen.size, expanded, otherDfTokens: dfOther.size, selection,
+          route: pick(route, ['code', 'chat', 'new', 'project', 'projects', 'settings', 'recents', '']),
+          skinMarker: getComputedStyle(document.documentElement).getPropertyValue('--reskin-active').trim() === '1',
+          html: attrsOf(document.documentElement), sidebar: desc(side), sidebarBox: box(side),
+          tokens, samples: { body: sample('body'), sidebar: sample('.dframe-sidebar'), icon: sample('[data-cds=Icon]'), code: sample('pre, code'), input: sample('textarea, [contenteditable=true]') },
+          texts: [...groups.values()].sort((a, b) => a.box.y - b.box.y),
+        }
+      })()\` }])).catch(() => ({ code: 'error' }))
+    }
+    out.push(row)
+  }
+  const pages = out.filter(r => r.page)
+  // Every window's outcome is listed; a run that learned nothing fails rather than printing an empty success.
+  const partial = pages.filter(r => r.page.code !== 'ok').map(r => 'window ' + r.id + ': ' + r.page.code)
+  if (all.length > 6) partial.push('only the first 6 of ' + all.length + ' windows were read')
+  const good = pages.some(r => r.page.code === 'ok' && r.page.texts.length > 0 && r.page.dataRows >= 2)
+  return { errors: good ? [] : ['no window had a readable sidebar with at least two visible session rows (' + (pages.map(r => r.page.code).join(', ') || 'no Claude page') + ')'], partial, windows: out }
+})()`
 // P9, read-only: Claude's "Enable Main Process Debugger" menu item as it stands now (checked or not), and the
 // start of its click handler's source, so the agreed checkmark fix can be chosen. Clicks nothing, changes nothing.
 const MENU_PROBE = `(() => {
@@ -1446,12 +1854,108 @@ function checkCss(raw) {
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
+// Type sheets (2 Nov 2026) get their own checker, so the colour checker stays exactly as reviewed. Same outer guards
+// (plain ASCII, no quotes or backslashes, no comments left open, loads nothing). Then: top-level rules only (no @-rules),
+// each selector one of TYPE_RULES exactly (found by the live probe; never icons, code or warnings), and on each only the
+// declarations listed for it: font-size (whole px, 11 to 16), font-weight (400, 500, 600 or 700), the sidebar row text
+// size token --df-row-font (whole px, 11 to 16, on the sidebar only; session names, and some top controls and footer
+// text), and colour only as one of the skin's own text tokens (accent or primary): the one deliberate exception to "colours only through
+// checkCss", since it can only point at a colour the skin or Claude already sets, never bring one of its own. Optionally !important. No other var(), calc(), brackets or relative units.
+const TYPE_HEADER = '.dframe-sidebar .df-label-inset h3 span.inline-block.whitespace-nowrap'
+// The same header text, but only while its project is open (Claude marks the header button aria-expanded=true).
+const TYPE_HEADER_OPEN = '.dframe-sidebar .df-label-inset h3 button[aria-expanded=true] span.inline-block.whitespace-nowrap'
+// The header of the project that holds the open chat: Claude marks that chat's row button aria-current=page, and each
+// project sits in its own isolate rounded-lg box with its header two levels down (live probe, 2 Nov 2026).
+const TYPE_HEADER_CURRENT = '.dframe-sidebar div.isolate.rounded-lg:has([aria-current=page]) > div > div > .df-label-inset h3 span.inline-block.whitespace-nowrap'
+export const TYPE_RULES = new Map([
+  ['.dframe-sidebar', new Set(['--df-row-font'])],
+  [TYPE_HEADER, new Set(['font-size', 'font-weight', 'color'])],
+  [TYPE_HEADER_OPEN, new Set(['color'])],
+  [TYPE_HEADER_CURRENT, new Set(['color'])],
+])
+export const TYPE_SELECTORS = new Set(TYPE_RULES.keys())
+const TYPE_ACCENT = 'var(--cds-text-accent)'
+// Colour only as one of the skin's own text tokens (Claude's own with no skin): never a colour of the sheet's own.
+const TYPE_COLOURS = new Set([TYPE_ACCENT, 'var(--cds-text-primary)'])
+// The only bracketed text a type sheet may hold: those tokens, the attribute in TYPE_HEADER_OPEN and the :has() in TYPE_HEADER_CURRENT.
+const TYPE_BRACKETED = [...TYPE_COLOURS, '[aria-expanded=true]', ':has([aria-current=page])']
+const TYPE_MAX = 2048
+export function checkTypeCss(raw) {
+  if (typeof raw !== 'string') throw new Error('The type sheet is not text.')
+  if (/[^\x20-\x7e\t\n\r\f]/.test(raw)) throw new Error('The type sheet may contain only plain ASCII characters, spaces, tabs and line breaks.')
+  if (/["'\\]/.test(raw)) throw new Error('The type sheet may not contain quotes or backslashes.')
+  if (raw.length > TYPE_MAX) throw new Error(`The type sheet is larger than ${TYPE_MAX / 1024} KB.`)
+  // Comments only between complete rules: CSS drops a comment without leaving a space, so one inside a selector
+  // (.a/**/.b) would make a different selector from the one checked here.
+  let css = '', depth = 0, pending = ''
+  for (let i = 0; i < raw.length; i++) {
+    if (raw.startsWith('/*', i)) {
+      if (depth !== 0 || pending.trim() !== '') throw new Error('Comments are allowed only between rules, not inside a selector or a rule.')
+      const end = raw.indexOf('*/', i + 2)
+      if (end === -1) throw new Error('The type sheet has an unclosed comment.')
+      i = end + 1
+      css += ' '
+      continue
+    }
+    const c = raw[i]
+    if (c === '{') { depth++; pending = '' } else if (c === '}') { depth--; pending = '' } else if (depth === 0) pending += c
+    css += c
+  }
+  css = css.trim()
+  if (css.includes('*/')) throw new Error('The type sheet has a stray comment end.')
+  if (/url|@|image-set|image\s*\(|src\s*\(|\/\/|expression\s*\(/i.test(css)) throw new Error('The type sheet may not load anything or use @-rules.')
+  // The accent token is the one bracketed value allowed; any other bracket or parenthesis is refused.
+  if (/[()\[\]]/.test(TYPE_BRACKETED.reduce((t, b) => t.split(b).join(' '), css))) throw new Error('The type sheet may not use brackets or parentheses (no var() but the skin text tokens, no calc(), no attribute selectors but the open-project one).')
+  let rules = 0, at = 0
+  while (at < css.length) {
+    const open = css.indexOf('{', at)
+    if (open === -1) throw new Error('Nothing may follow the last rule.')
+    const close = css.indexOf('}', open)
+    if (close === -1) throw new Error('The type sheet has an unclosed rule.')
+    const sel = css.slice(at, open).trim().replace(/\s+/g, ' ')
+    if (sel.includes('}')) throw new Error('The type sheet has a stray closing brace.')
+    const body = css.slice(open + 1, close)
+    if (body.includes('{')) throw new Error('Rules may not be nested.')
+    const allowed = TYPE_RULES.get(sel)
+    if (allowed === undefined) throw new Error(`Not one of the allowed type selectors (one per rule): ${sel.slice(0, 80)}`)
+    const decls = body.split(';').map((d) => d.trim()).filter(Boolean)
+    if (decls.length === 0) throw new Error('A rule sets nothing.')
+    for (const d of decls) {
+      const m = /^(--df-row-font|[a-z-]+)\s*:\s*([0-9a-z]+|var\(--cds-text-(?:accent|primary)\))\s*(!\s*important)?$/.exec(d)
+      if (m === null) throw new Error(`Not a declaration I understand: ${d.slice(0, 60)}`)
+      const [, name, value] = m
+      if (!allowed.has(name)) throw new Error(`${name.slice(0, 40)} may not be set on ${sel.slice(0, 60)}.`)
+      const px = () => { const v = /^(\d{2})px$/.exec(value); if (!v || Number(v[1]) < 11 || Number(v[1]) > 16) throw new Error(`${name} must be a whole px size from 11px to 16px, not: ${value}`) }
+      if (name === 'font-size' || name === '--df-row-font') px()
+      else if (name === 'font-weight') { if (!/^(400|500|600|700)$/.test(value)) throw new Error(`font-weight must be 400, 500, 600 or 700, not: ${value}`) }
+      else if (name === 'color') { if (!TYPE_COLOURS.has(value)) throw new Error(`color may only be one of the skin text tokens (${[...TYPE_COLOURS].join(', ')}), not: ${value}`) }
+    }
+    rules++
+    at = close + 1
+    while (at < css.length && /\s/.test(css[at])) at++
+  }
+  if (rules === 0) throw new Error('The type sheet is empty.')
+  return rules
+}
+
+// The reviewed type sheets for the helper, each passing checkTypeCss (fixed at injection). Today one: 'on'.
+export function helperTypeSheets(dir = path.join(here, 'type')) {
+  return typeSheetsWhy(dir).sheets
+}
+// The same, with the reason when nothing is offered (missing, unreadable or refused by checkTypeCss), for the tick report.
+export function typeSheetsWhy(dir = path.join(here, 'type')) {
+  let css
+  try { css = readFileSync(path.join(dir, 'sidebar-headers.css'), 'utf8') } catch (e) { return { sheets: {}, why: e.code === 'ENOENT' ? 'no type sheet in this copy' : 'the type sheet could not be read' } }
+  try { checkTypeCss(css) } catch (e) { return { sheets: {}, why: 'the type sheet did not pass its check: ' + String(e.message).slice(0, 120) } }
+  return { sheets: { on: css }, why: null }
+}
+
 // Every reviewed preset, each passing checkCss, for the helper (fixed at injection; release 1 has no custom colours).
 export function helperPresets(dir = path.join(here, 'presets')) {
   const map = {}
   const skipped = []
   // Dot census test sheets (dotcheck-*) are for batch runs only: never offered to a helper, where they would stay until Claude quits.
-  for (const f of readdirSync(dir).filter(f => /^[a-z0-9]+(?:-[a-z0-9]+)*\.css$/.test(f) && !f.startsWith('dotcheck-') && !['off.css', 'remove.css', 'check.css'].includes(f)).sort()) {
+  for (const f of readdirSync(dir).filter(f => /^[a-z0-9]+(?:-[a-z0-9]+)*\.css$/.test(f) && !f.startsWith('dotcheck-') && !f.startsWith('type-') && !['off.css', 'remove.css', 'check.css'].includes(f)).sort()) {
     const name = f.slice(0, -4)
     try { const css = readFileSync(path.join(dir, f), 'utf8'); checkCss(css); map[name] = css } catch { skipped.push(name) }
   }
@@ -1634,12 +2138,20 @@ async function main() {
   const unknownFlag = flags.find(f => !['--patient', '--no-helper', '--wait-open', '--quick', '--dot-census'].includes(f))
   if (unknownFlag) { console.log(`Unknown option: ${unknownFlag}`); return 2 }
   if (dots && mode !== 'batch') { console.log('--dot-census works with batch only.'); return 2 }
-  if (waitOpen && !['apply', 'remove'].includes(mode)) { console.log('--wait-open works with apply or remove only.'); return 2 }
+  if (waitOpen && !['apply', 'remove', 'type-probe'].includes(mode)) { console.log('--wait-open works with apply, remove or type-probe only.'); return 2 }
   if (quick && !(waitOpen && withHelper)) { console.log('--quick needs apply with the colour helper and --wait-open.'); return 2 }
-  if (!['probe', 'menu-probe', 'state', 'selftest', 'reset', 'apply', 'remove', 'close', 'check-css', 'verify', 'batch', 'batch-check'].includes(mode ?? '')) {
-    console.log('Usage: node skin.mjs probe | menu-probe | state | selftest | reset | apply <file.css> [--no-helper] | remove | close | check-css <file.css> | verify | batch previous|off <preset.css>... | batch-check previous|off <preset.css>...')
+  if (!['probe', 'type-probe', 'menu-probe', 'state', 'selftest', 'reset', 'apply', 'remove', 'close', 'check-css', 'verify', 'batch', 'batch-check'].includes(mode ?? '')) {
+    console.log('Usage: node skin.mjs probe | type-probe [--wait-open] | menu-probe | state | selftest | reset | apply <file.css> [--no-helper] | remove | close | check-css <file.css> | verify | batch previous|off <preset.css>... | batch-check previous|off <preset.css>...')
     return 2
   }
+  // The public release (release.json beside this file, not saying "oneClick": true) runs only what the tick path needs;
+  // the developer modes stay in the development copy (no release.json), here as in skin-auto.mjs.
+  const release = (() => {
+    const f = path.join(here, 'release.json')
+    try { lstatSync(f) } catch (e) { return e.code !== 'ENOENT' }
+    try { return JSON.parse(readFileSync(f, 'utf8'))?.oneClick !== true } catch { return true }
+  })()
+  if (release && ['probe', 'type-probe', 'menu-probe', 'state', 'selftest', 'reset', 'batch'].includes(mode)) { console.log(`${mode} is a developer mode and is not in this release.`); return 2 }
   // Offline: would this batch list be accepted? Never touches Claude or any port.
   if (mode === 'batch-check') {
     const b = prepareBatch(process.argv.slice(3).filter(a => !a.startsWith('--')))
@@ -1668,6 +2180,8 @@ async function main() {
   // A dot census run gets a fresh random salt for the row hashes: rows match across this run's reads, never across runs.
   const batch = mode === 'batch' ? { ...prepareBatch(process.argv.slice(3).filter(a => !a.startsWith('--'))), dots, salt: randomBytes(16).toString('hex') } : null
   const presets = withHelper ? helperPresets() : null
+  const typeOffer = withHelper ? typeSheetsWhy() : { sheets: {}, why: null }
+  const typeSheets = typeOffer.sheets
   checkSignature()
 
   let first = null
@@ -1763,6 +2277,7 @@ async function main() {
     verified = true
     await conn.evaluate(arm(quick ? TICK.armMs : FALLBACK_CLOSE_MS))
     if (mode === 'probe') result = await conn.evaluate(PROBE)
+    if (mode === 'type-probe') result = await conn.evaluate(TYPE_PROBE)
     if (mode === 'menu-probe') result = await conn.evaluate(MENU_PROBE, 2_000)
     if (mode === 'selftest') result = await conn.evaluate(SELFTEST)
     if (mode === 'state') result = await conn.evaluate(STATE)
@@ -1773,11 +2288,11 @@ async function main() {
     if (mode === 'apply' && !quick) try { claudeVersion = String(await conn.evaluate(VERSION, 1_500)) } catch {}
     // The helper only after a clean apply; it never decides whether the apply itself worked.
     if (withHelper && result?.errors?.length === 0) {
-      try { helper = await conn.evaluate(helperCode(presets.map, STATE_DIR), 3_000) } catch (e) { helper = { helper: 'none', why: e.message } }
+      try { helper = await conn.evaluate(helperCode(presets.map, STATE_DIR, typeSheets), 3_000) } catch (e) { helper = { helper: 'none', why: e.message } }
     }
     if (mode === 'remove' || mode === 'reset') try { await conn.evaluate(STOP_HELPER, 1_500) } catch {}
-    if (mode === 'remove') result = await conn.evaluate(setCode(null), 14_000)
-    if (mode === 'reset') result = await conn.evaluate(setCode(null, true), 14_000)
+    if (mode === 'remove') result = await conn.evaluate(setCode(null, false, false, false, true), 14_000)
+    if (mode === 'reset') result = await conn.evaluate(setCode(null, true, false, false, true), 14_000)
     if (mode === 'batch') {
       result = await runBatch(conn, opened, batch)
       const bad = result.items.filter(i => i.status === 'apply failed').map(i => i.name)
@@ -1832,6 +2347,7 @@ async function main() {
     if (quick) console.log('DEFERRED_CHECKS') // skin-auto asks the helper for them, with the debugger closed
     else console.log(`SAMPLES: ${JSON.stringify({ mode: claudeMode, version: claudeVersion, samples: result.samples ?? [] })}`)
     if (withHelper) console.log(helper?.helper === 'active' ? `HELPER: active ${helper.session}` : `HELPER: none ${helper?.why ?? 'the apply did not fully succeed'}`)
+    if (withHelper && helper?.helper === 'active') console.log(typeOffer.why === null ? 'type switch: available (/skin type on)' : `type switch: not available (${typeOffer.why})`)
     if (presets?.skipped.length) console.log(`NOTE: presets left out of the helper (failed the check): ${presets.skipped.join(', ')}`)
   }
   if (failure !== null) {

@@ -28,8 +28,10 @@ comfortable with this, do not use it.
   that, only the guardians close the port.
 - **On a Mac without Google Chrome,** Claude shows "Inspector session is active" and freezes until you click OK. Nothing
   can close the port before that click, so the open time includes your click.
-- **`skin.mjs` run directly** (developers only) has no guardian and no run lock. It sets the 22 s timer once it reaches
-  Claude; if it stops before that, the port stays open until you quit Claude.
+- **`skin.mjs` run directly** (developers only) has no guardian and no run lock. This release refuses `probe`,
+  `type-probe`, `menu-probe`, `state`, `selftest`, `reset` and `batch`; offline checks remain available. Once it reaches Claude it
+  sets the close timer (8 s with `--quick`, otherwise 22 s); if it stops before that, the port stays open until you quit
+  Claude.
 - **Switching skins later** (`/skin <name>` while the helper runs, `switch`, Raycast) opens no port at all.
 
 ## What Reskin does to limit the risk
@@ -38,13 +40,17 @@ comfortable with this, do not use it.
 - Refuses to start if port 9229 is already open, or if another Reskin run is in progress (a lock on local port 47619).
 - Before sending anything, checks that the process listening on the port is that same signed Claude, listening on
   127.0.0.1 only, and that Claude itself holds the other end of Reskin's connection.
-- Sends colours only. A skin may set colour values and nothing else (no hiding, moving or relabelling), each stylesheet
+- Colour skins change colours only. A skin may set colour values and nothing else (no hiding, moving or relabelling), each stylesheet
   is at most 16 KB, and only Reskin's own 16 skins are accepted.
+- The optional type sheet (bold project headers) has its own stricter check: exact selectors written into the code, only
+  font size (11 to 16 px), font weight (400 to 700), the sidebar row text size, and a colour that can only be one of the
+  skin's own two text colour tokens. No other property, value, selector, link or font file is accepted, and it is at most
+  2 KB. It is off until you run `/skin type on`.
 - Clears the menu tick when it closes the debugger and checks that it worked; if not, it tells you not to click the
   item and to quit and reopen Claude.
 - Never clicks the menu item itself in this release, never runs at login and never reapplies a skin on its own.
-- After the first skin, a colour helper stays inside Claude until it quits. It accepts only skin names, `off`, `remove`
-  and a read-only check. Its files sit in `~/Library/Application Support/claude-skin/`, a folder only you can open
+- After the first skin, a colour helper stays inside Claude until it quits. It accepts only skin names, `off`, `remove`,
+  a read-only check, `type-on` (only when this copy has the type sheet) and `type-off` (always, as it only removes). Its files sit in `~/Library/Application Support/claude-skin/`, a folder only you can open
   (folder 700, files 600).
 - Sends nothing off this Mac (its only connections are to Claude on 127.0.0.1) and changes no Claude files or settings.
 - Writes one log entry per run to `~/Library/Logs/Reskin/skin.log`, with known secret formats removed.

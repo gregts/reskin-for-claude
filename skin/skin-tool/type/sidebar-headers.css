@@ -1,0 +1,16 @@
+/* Reskin type sheet (2 Nov 2026): project headers in the Code tab sidebar bold at 14px, one step above the session
+   names (13px, one step under Claude). Headers in the skin main text colour; the project that holds the open chat in the
+   skin accent, so the eye finds where you are. Only the header text span; its icons are left alone. Line height is not
+   changed. Measured on Claude 4.4212.0: headers 12px at weight 520, session names 14px (--df-row-font). Both colours are
+   the skin own text tokens (Claude own with no skin), so they follow every skin and both modes with no colour of their own. */
+.dframe-sidebar {
+  --df-row-font: 13px !important;
+}
+.dframe-sidebar .df-label-inset h3 span.inline-block.whitespace-nowrap {
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  color: var(--cds-text-primary) !important;
+}
+.dframe-sidebar div.isolate.rounded-lg:has([aria-current=page]) > div > div > .df-label-inset h3 span.inline-block.whitespace-nowrap {
+  color: var(--cds-text-accent) !important;
+}

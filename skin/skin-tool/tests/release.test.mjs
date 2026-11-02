@@ -36,6 +36,24 @@ test('with oneClick false, every run that would tick the menu itself is refused 
   }
 })
 
+test('with oneClick false, the developer modes are refused even with tick; tick remove still works', () => {
+  const c = copy('{"oneClick": false}\n')
+  for (const m of ['type-probe', 'probe', 'menu-probe', 'state', 'selftest', 'reset']) {
+    const r = run(c, ['tick', m, '--dry-run'])
+    assert.equal(r.status, 2, `${m}: ${r.stderr}`)
+    assert.match(r.stderr, /developer mode and is not in this release/, m)
+  }
+  // skin.mjs itself refuses them too in a release copy, and still runs what the tick path needs.
+  for (const m of ['type-probe', 'probe', 'menu-probe', 'state', 'selftest', 'reset', 'batch']) {
+    const r = spawnSync(process.execPath, [path.join(c.d, 'skin.mjs'), m], { encoding: 'utf8', timeout: 30_000, env: c.env })
+    assert.equal(r.status, 2, `skin.mjs ${m}: ${r.stdout}`)
+    assert.match(r.stdout, /developer mode and is not in this release/, `skin.mjs ${m}`)
+  }
+  assert.equal(spawnSync(process.execPath, [path.join(c.d, 'skin.mjs'), 'check-css', path.join(c.d, 'presets', 'nord.css')], { encoding: 'utf8', timeout: 30_000, env: c.env }).status, 0)
+  const dev = copy()
+  assert.doesNotMatch(run(dev, ['tick', 'type-probe', '--dry-run']).stderr, /developer mode/, 'the development copy keeps them')
+})
+
 test('with oneClick false, tick, switch, status, check and --check each do their own job', () => {
   const c = copy('{"oneClick": false}')
   const env = { ...c.env, RESKIN_LOG: 'off' }

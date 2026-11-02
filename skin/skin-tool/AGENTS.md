@@ -7,8 +7,9 @@ First time only: in Claude choose Help > Troubleshooting > Enable Developer Mode
 Without it there is no Developer > Enable Main Process Debugger item to tick, and every tick run times out.
 
 After updating Reskin: quit and reopen Claude once before the next run. A colour helper from the older version may
-still be running inside Claude; every command except `status` refuses with "Quit and reopen Claude once" until it is
-gone (`status` says the same).
+still be running inside Claude; `switch`, `tick`, `one-click`, `type` and `check` refuse with "Quit and reopen Claude
+once" until it is gone (`status` says the same; `list`, `about`, `log` and offline checks still work). Then apply a skin again, and run `type on` if the user wants the type changes; do this
+even if Reskin does not ask for a restart.
 
 ## What it does, honestly
 
@@ -25,8 +26,8 @@ gone (`status` says the same).
   guardian tries 6 times. On a Mac without Chrome,
   Claude is frozen until the user clicks OK on its message, so the port stays open until then: no timer can run sooner.
 - After the first apply, a small colour helper stays inside Claude until Claude quits. The debugger is closed by then.
-  The helper can only switch between Reskin's presets, Off, or remove itself, and any program running as this user
-  could ask it to. Its file checks (private folder and files, session ID, numbered requests) catch accidents and stale
+  The helper can only switch between Reskin's presets, Off, the optional type sheet (on or off), or remove itself, and
+  any program running as this user could ask it to. Its file checks (private folder and files, session ID, numbered requests) catch accidents and stale
   files, not a determined program running as the user, which could also fake the helper's answers. Other user accounts
   cannot reach it (the folder is private to you).
 - It never patches Claude's files, never writes Claude's settings, never ticks the menu at login or on relaunch, and
@@ -41,12 +42,14 @@ gone (`status` says the same).
 | `switch <preset\|off\|remove>` | a running helper | asks the helper; no tick, no port, no Chrome |
 | `tick <preset\|remove>` | the user clicks the menu item once | default when there is no helper |
 | `one-click <preset\|remove>` | Accessibility for this terminal | the run ticks the menu itself. Not in the public release: there `release.json` says `"oneClick": false` and the tool refuses it |
-| `status` | nothing | read-only: helper, request count, last skin |
+| `type <on\|off>` | a running helper | the optional type sheet: sidebar project headers 14px bold (the open chat's project in the skin's accent), session names 13px. No tick, no port. `switch off` keeps it; `switch remove` takes it off |
+| `status` | nothing | read-only: helper, request count, last skin and saved type preference; use `check` to inspect type on the current pages |
 | `check` | a running helper | read-only health check: does the skin still show its own colours? No tick, no port |
 
 Presets: the file names in `presets/` without `.css` (for example `tokyo-night`, `dracula`; each has a dark and a light half). Use preset names only.
-`skin-auto.mjs` refuses anything that is not one of them, and every stylesheet may set colours only (no hiding, moving
-or relabelling anything).
+For colour skins, `skin-auto.mjs` accepts only preset names, and each preset stylesheet may set colours only (no
+hiding, moving or relabelling anything). The one type sheet (`type/sidebar-headers.css`) has its own stricter check: exact selectors,
+font size and weight within fixed limits, and colour only as the skin's own text tokens.
 
 ## Rules for agents
 
@@ -99,4 +102,5 @@ the tool's logging off for one run.
 ## After Claude restarts
 
 The helper is gone with Claude. `status` shows `helper: none` and may offer "Reapply <skin>?". Offer it to the user;
-it needs one tick. Nothing is ever reapplied automatically.
+it needs one tick. Nothing is ever reapplied automatically. Type also starts off after a restart: after applying a
+skin, run `type on` to enable it again.
