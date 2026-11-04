@@ -29,11 +29,16 @@ const PRESETS = { nord: NORD, dracula: DRACULA }
 const SEL = '.dframe-sidebar .df-label-inset h3 span.inline-block.whitespace-nowrap'
 const CUR = '.dframe-sidebar div.isolate.rounded-lg:has([aria-current=page]) > div > div > .df-label-inset h3 span.inline-block.whitespace-nowrap'
 const OPEN = '.dframe-sidebar .df-label-inset h3 button[aria-expanded=true] span.inline-block.whitespace-nowrap'
+const ACT = '.dframe-sidebar div.isolate.rounded-lg:has([data-cds=Pulse]) > div > div > .df-label-inset h3 span.inline-block.whitespace-nowrap'
+const ROW = '.dframe-sidebar div.isolate.rounded-lg:has([aria-current=page]) > div > div > .df-label-inset'
+const STRIPE = 'box-shadow: inset 3px 0 0 0 var(--cds-text-accent)'
 
 // ---- The checker ----
-test('checkTypeCss: the shipped sheet passes, and helperTypeSheets offers it as "on"', () => {
-  assert.equal(skin.checkTypeCss(TYPE), 3)
-  assert.deepEqual({ ...skin.helperTypeSheets(path.join(tool, 'type')) }, { on: TYPE })
+test('checkTypeCss: the shipped sheet passes, and helperTypeSheets offers it as "headers" (fonts only where shipped)', () => {
+  assert.equal(skin.checkTypeCss(TYPE), 5)
+  // The current-project rule shares the active rule's specificity, so it must come after it to win.
+  assert.ok(TYPE.indexOf(':has([data-cds=Pulse])') < TYPE.indexOf(':has([aria-current=page])'))
+  assert.deepEqual({ ...skin.helperTypeSheets(path.join(tool, 'type'), { fonts: false }) }, { headers: TYPE })
 })
 
 test('checkTypeCss: refuses every shape outside its narrow rules', () => {
@@ -69,7 +74,7 @@ test('checkTypeCss: refuses every shape outside its narrow rules', () => {
     'non-ASCII space': ok('font-weight: 600'),
     'empty': '  /* nothing */  ',
     'empty rule': ok(''),
-    'too large': ok('font-weight: 600;'.repeat(200)),
+    'too large': ok('font-weight: 600;'.repeat(300)),
     'a token on the header': ok('--df-row-font: 13px'),
     'the row size too big': ok('--df-row-font: 20px', '.dframe-sidebar'),
     'another token on the sidebar': ok('--df-group-font: 13px', '.dframe-sidebar'),
@@ -96,6 +101,51 @@ test('checkTypeCss: refuses every shape outside its narrow rules', () => {
     'a comment between selector and brace': `${SEL} /* x */ { font-weight: 600 }`,
     'a stray comment end': ok('font-weight: 600') + ' */',
     'transparent text': ok('color: transparent'),
+    'size on the active rule': ok('font-size: 15px', ACT),
+    'italic on the active rule': ok('font-style: italic', ACT),
+    'a looser active rule': ok('color: var(--cds-text-accent)', ACT.replace(' > div > div > ', ' ')),
+    'the active mark by its inline colour': ok('color: var(--cds-text-accent)', ACT.replace('[data-cds=Pulse]', '[data-cds=Pulse][style*=fill-accent]')),
+    'another mark kind': ok('color: var(--cds-text-accent)', ACT.replace('Pulse', 'Icon')),
+    'the active :has elsewhere': ok('color: var(--cds-text-accent)', '.dframe-sidebar div:has([data-cds=Pulse]) span'),
+    'italic on the current rule (dropped 3 Nov)': ok('font-style: italic', CUR),
+    'italic on every header': ok('font-style: italic'),
+    'italic on the open rule': ok('font-style: italic', OPEN),
+    'italic on the sidebar': ok('font-style: italic', '.dframe-sidebar'),
+    'oblique': ok('font-style: oblique', CUR),
+    'a slanted oblique': ok('font-style: oblique 10deg', CUR),
+    'font-style normal': ok('font-style: normal', CUR),
+    'the font shorthand': ok('font: italic 14px x', CUR),
+    'an underline (dropped 3 Nov)': ok('text-decoration-line: underline', CUR),
+    'a dotted style (dropped 3 Nov)': ok('text-decoration-style: dotted', CUR),
+    'an underline colour (dropped 3 Nov)': ok('text-decoration-color: var(--cds-text-accent)', CUR),
+    'an underline thickness (dropped 3 Nov)': ok('text-decoration-thickness: 1px', CUR),
+    'an underline offset (dropped 3 Nov)': ok('text-underline-offset: 1px', CUR),
+    'the text-decoration shorthand': ok('text-decoration: underline', CUR),
+    'padding on the current rule': ok('padding-bottom: 4px', CUR),
+    'the stripe on the name': ok(STRIPE, CUR),
+    'the stripe on every header': ok(STRIPE),
+    'the stripe on the active rule': ok(STRIPE, ACT),
+    'the stripe on the sidebar': ok(STRIPE, '.dframe-sidebar'),
+    'the stripe on every header row': ok(STRIPE, '.dframe-sidebar .df-label-inset'),
+    'the stripe on the active row': ok(STRIPE, ACT.replace(' h3 span.inline-block.whitespace-nowrap', '')),
+    'a looser current row': ok(STRIPE, ROW.replace(' > div > div > ', ' ')),
+    'the row with its h3': ok(STRIPE, ROW + ' h3'),
+    'a wider stripe': ok('box-shadow: inset 30px 0 0 0 var(--cds-text-accent)', ROW),
+    'a stripe outside the row': ok('box-shadow: -3px 0 0 0 var(--cds-text-accent)', ROW),
+    'a blurred stripe': ok('box-shadow: inset 3px 0 8px 0 var(--cds-text-accent)', ROW),
+    'a spread shadow': ok('box-shadow: inset 0 0 0 99px var(--cds-text-accent)', ROW),
+    'a stripe in its own colour': ok('box-shadow: inset 3px 0 0 0 red', ROW),
+    'a stripe in the text colour': ok('box-shadow: inset 3px 0 0 0 var(--cds-text-primary)', ROW),
+    'two shadows': ok('box-shadow: inset 3px 0 0 0 var(--cds-text-accent), inset -3px 0 0 0 var(--cds-text-accent)', ROW),
+    'the stripe with extra spaces': ok('box-shadow: inset  3px 0 0 0 var(--cds-text-accent)', ROW),
+    'the stripe set twice with junk': ok(STRIPE + ' x', ROW),
+    'no shadow': ok('box-shadow: none', ROW),
+    'a colour on the row': ok('color: var(--cds-text-accent)', ROW),
+    'a weight on the row': ok('font-weight: 500', ROW),
+    'a background on the row': ok('background-color: var(--cds-text-accent)', ROW),
+    'an outline on the row (looks like focus)': ok('outline: 1px dashed var(--cds-text-accent)', ROW),
+    'a border on the row': ok('border-left: 3px solid var(--cds-text-accent)', ROW),
+    'the box-shadow word inside another property': ok('--box-shadow: inset 3px 0 0 0 var(--cds-text-accent)', ROW),
   }
   for (const [why, css] of Object.entries(bad)) assert.throws(() => skin.checkTypeCss(css), Error, `should refuse: ${why}`)
   // Allowed variants still pass.
@@ -103,6 +153,11 @@ test('checkTypeCss: refuses every shape outside its narrow rules', () => {
   assert.equal(skin.checkTypeCss(ok('color: var(--cds-text-accent)') + ' .dframe-sidebar { --df-row-font: 12px }'), 2)
   assert.equal(skin.checkTypeCss(ok('color: var(--cds-text-primary)') + ' ' + ok('color: var(--cds-text-accent)', OPEN)), 2)
   assert.equal(skin.checkTypeCss(ok('color: var(--cds-text-accent)', CUR)), 1)
+  assert.equal(skin.checkTypeCss(ok('color: var(--cds-text-accent); font-weight: 500', ACT)), 1)
+  assert.equal(skin.checkTypeCss(ok('color: var(--cds-text-accent); font-weight: 500 !important', CUR)), 1)
+  assert.equal(skin.checkTypeCss(ok(STRIPE + ' !important', ROW)), 1)
+  assert.equal(skin.checkTypeCss(ok(STRIPE + ';', ROW)), 1)
+  assert.equal(skin.checkTypeCss(ok('box-shadow:inset 3px 0 0 0 var(--cds-text-accent)', ROW)), 1, 'no space after the colon is fine')
   assert.equal(skin.checkTypeCss('/* a */ ' + ok('font-weight: 600') + ' /* b */ ' + ok('font-size: 12px') + ' /* c */'), 2, 'comments between rules are fine')
 })
 
@@ -156,7 +211,7 @@ const put = (c, dir, sessionId, action) => { void sendSwitch(nodeFs, dir, sessio
 const kinds = (p) => [...p.sheets.values()].map((c) => (c.includes('--reskin-type') ? 'type' : c.includes('--reskin-active') ? 'colour' : 'other')).sort()
 const settle = () => new Promise((r) => setTimeout(r, 40))
 
-async function started(typeSheets = { on: TYPE }) {
+async function started(typeSheets = { headers: TYPE }) {
   const c = fakeClaude()
   const d = tmp()
   await vmRun(c, skin.setCode(NORD))
@@ -318,8 +373,8 @@ test('reset: a reset whose reload did not take reports the type sheet still ther
 test('typeLine: the check reports what the pages show, not only what the helper means', () => {
   const page = (t, more = {}) => ({ typeMarker: t, anchors: { sidebar: true }, typeHeaders: 22, typeCurrent: 1, ...more })
   const on = (pages, stable = true) => typeLine({ type: 'on', sample: { stable, pages } })
-  assert.equal(on([page(true)]), "type: bold project headers on (22 header(s); the open chat's project is highlighted)")
-  assert.match(on([page(true, { typeCurrent: 0 })]), /no project highlighted now: the open chat's project is collapsed/)
+  assert.equal(on([page(true)]), "type: project headers with activity colours on (22 header(s); the open chat's project header found)")
+  assert.match(on([page(true, { typeCurrent: 0 })]), /the open chat's project header not found now: no chat open/)
   // The sheet is in but its rules find nothing: Claude changed its sidebar. Never reported as working.
   assert.match(on([page(true, { typeHeaders: 0, typeCurrent: 0 })]), /found no project header in the sidebar .*run \/skin type off/)
   assert.match(on([page(true, { anchors: { sidebar: false } })]), /no sidebar on screen now/)
@@ -393,8 +448,9 @@ test('reset with two pages: an insert that lands during the proof keeps the slot
     }
     await vmRun(c, skin.setCode(null, true, false, false, true))
     await settle()
-    assert.ok(kinds(p1).includes('type'), 'the late insert landed on page 1')
-    assert.equal(await vmRun(c, 'globalThis.__reskin.typeDirty()'), true)
+    // Since fonts (3 Nov 2026) the helper cleans up after a type change that failed (here: undone by the reset), and
+    // proves that cleanup too. Either way a sheet still on a page must keep the slot marked.
+    assert.ok(!kinds(p1).includes('type') || (await vmRun(c, 'globalThis.__reskin.typeDirty()')) === true, 'a sheet still on page 1 keeps the slot marked')
     const rem = await vmRun(c, skin.setCode(null, false, false, false, true))
     assert.ok(!kinds(p1).includes('type') || /type/.test(String(rem.errors)), 'gone, or reported')
   } finally { d.done() }

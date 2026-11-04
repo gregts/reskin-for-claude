@@ -42,15 +42,21 @@ comfortable with this, do not use it.
   127.0.0.1 only, and that Claude itself holds the other end of Reskin's connection.
 - Colour skins change colours only. A skin may set colour values and nothing else (no hiding, moving or relabelling), each stylesheet
   is at most 16 KB, and only Reskin's own 16 skins are accepted.
-- The optional type sheet (bold project headers) has its own stricter check: exact selectors written into the code, only
-  font size (11 to 16 px), font weight (400 to 700), the sidebar row text size, and a colour that can only be one of the
-  skin's own two text colour tokens. No other property, value, selector, link or font file is accepted, and it is at most
-  2 KB. It is off until you run `/skin type on`.
+- The optional type sheet (project headers) has its own stricter check: exact selectors written into the code, only
+  font size (11 to 16 px), font weight (400, 500, 600 or 700), the sidebar row text size, a colour that can only be
+  one of the skin's own two text colour tokens, and on the open chat's project header row one fixed accent stripe
+  (`box-shadow: inset 3px 0 0 0 var(--cds-text-accent)`, that exact value only). No other property, value, selector,
+  link or font file is accepted. The header sheet itself is about 1.3 KB; the checker refuses any type slot (header
+  sheet plus font parts) over 4,608 bytes. It is off until you run `/skin type on`.
+- Fonts (optional) are small fixed rule sets, each checked text for text: exact selectors written into the code, one of
+  seven font names from a fixed table (no quotes, no font file, no link), sizes and weights from fixed tables. The helper
+  only joins these checked parts in a fixed order; the whole slot is at most 4,608 bytes (4.5 KB). Off until you choose a font.
 - Clears the menu tick when it closes the debugger and checks that it worked; if not, it tells you not to click the
   item and to quit and reopen Claude.
 - Never clicks the menu item itself in this release, never runs at login and never reapplies a skin on its own.
 - After the first skin, a colour helper stays inside Claude until it quits. It accepts only skin names, `off`, `remove`,
-  a read-only check, `type-on` (only when this copy has the type sheet) and `type-off` (always, as it only removes). Its files sit in `~/Library/Application Support/claude-skin/`, a folder only you can open
+  a read-only check, `type-on` (only when this copy has the type sheet), `type-off` (always, as it only removes), and a
+font request naming only parts this copy gave it (`font-off` always). Its files sit in `~/Library/Application Support/claude-skin/`, a folder only you can open
   (folder 700, files 600).
 - Sends nothing off this Mac (its only connections are to Claude on 127.0.0.1) and changes no Claude files or settings.
 - Writes one log entry per run to `~/Library/Logs/Reskin/skin.log`, with known secret formats removed.

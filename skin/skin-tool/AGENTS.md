@@ -7,7 +7,7 @@ First time only: in Claude choose Help > Troubleshooting > Enable Developer Mode
 Without it there is no Developer > Enable Main Process Debugger item to tick, and every tick run times out.
 
 After updating Reskin: quit and reopen Claude once before the next run. A colour helper from the older version may
-still be running inside Claude; `switch`, `tick`, `one-click`, `type` and `check` refuse with "Quit and reopen Claude
+still be running inside Claude; `switch`, `tick`, `one-click`, `type`, `font` and `check` refuse with "Quit and reopen Claude
 once" until it is gone (`status` says the same; `list`, `about`, `log` and offline checks still work). Then apply a skin again, and run `type on` if the user wants the type changes; do this
 even if Reskin does not ask for a restart.
 
@@ -26,7 +26,8 @@ even if Reskin does not ask for a restart.
   guardian tries 6 times. On a Mac without Chrome,
   Claude is frozen until the user clicks OK on its message, so the port stays open until then: no timer can run sooner.
 - After the first apply, a small colour helper stays inside Claude until Claude quits. The debugger is closed by then.
-  The helper can only switch between Reskin's presets, Off, the optional type sheet (on or off), or remove itself, and
+  The helper can only switch between Reskin's presets, Off, the optional type sheet (on or off), the reviewed fonts, sizes
+  and weights (the font picker), or remove itself, and
   any program running as this user could ask it to. Its file checks (private folder and files, session ID, numbered requests) catch accidents and stale
   files, not a determined program running as the user, which could also fake the helper's answers. Other user accounts
   cannot reach it (the folder is private to you).
@@ -42,14 +43,20 @@ even if Reskin does not ask for a restart.
 | `switch <preset\|off\|remove>` | a running helper | asks the helper; no tick, no port, no Chrome |
 | `tick <preset\|remove>` | the user clicks the menu item once | default when there is no helper |
 | `one-click <preset\|remove>` | Accessibility for this terminal | the run ticks the menu itself. Not in the public release: there `release.json` says `"oneClick": false` and the tool refuses it |
-| `type <on\|off>` | a running helper | the optional type sheet: sidebar project headers 14px bold (the open chat's project in the skin's accent), session names 13px. No tick, no port. `switch off` keeps it; `switch remove` takes it off |
+| `type <on\|off>` | a running helper | the optional type sheet: sidebar project headers 14px; active projects (a session running, waiting or unread) in the skin's accent, the open chat's project also with an accent stripe at the left of its header row; session names 13px. No tick, no port. `switch off` keeps it; `switch remove` takes it off |
+| `font <name>[-<size 12 to 16>]\|off\|list` | a running helper | in this release (`release.json` says `"font": true`; a copy without it refuses fonts): body text, replies, message box, buttons and sidebar in one of the reviewed fonts (`list` shows them and their download links); an optional size (12 to 16 px) applies to chat text only (replies and the message box), for example `font plex-16`. Checks the font is installed first. Code and the serif titles stay Claude's; Claude's own font menu has no effect on that text while one is on. `type off` keeps the font, `font off` keeps the headers; `switch remove` takes both |
+| `set [<preset>\|off] [font <name>\|off] [type on\|off]` | a running helper | the one-line command: checks every part first (nothing sent if any is wrong), then skin, font, type in that order, each through its own request; stops at the first part that does not complete and reports each part from the helper's last proven state. With no helper it refuses with "No colour helper is running"; then, with the user's yes, `tick <preset> --want-font=<name\|off> --want-type=on\|off` applies the skin and those parts in one tick run (`part:` lines) |
+| `look show` / `look set <all\|chat\|rows\|headers\|ui> font=<name\|same\|claude> size=<n\|claude> weight=<n\|claude>` | a running helper (generation 8) | shipped with `font`: the font picker behind `/skin fonts`. `all` takes a font only (one font everywhere) and keeps each part's size and weight. `show` prints what the helper proves is on now as one `LOOK: {json}` line (read-only). `set` changes one part of the app (chat text, sidebar rows, project headers, everything else) and keeps the others; it checks the whole result first (weights the font has, every font installed). No tick, no port. `font <name>` replaces the whole look; `font off` clears it |
 | `status` | nothing | read-only: helper, request count, last skin and saved type preference; use `check` to inspect type on the current pages |
 | `check` | a running helper | read-only health check: does the skin still show its own colours? No tick, no port |
 
 Presets: the file names in `presets/` without `.css` (for example `tokyo-night`, `dracula`; each has a dark and a light half). Use preset names only.
 For colour skins, `skin-auto.mjs` accepts only preset names, and each preset stylesheet may set colours only (no
 hiding, moving or relabelling anything). The one type sheet (`type/sidebar-headers.css`) has its own stricter check: exact selectors,
-font size and weight within fixed limits, and colour only as the skin's own text tokens.
+font size and weight within fixed limits, and colour only as the skin's own text tokens. Fonts, sizes and weights are
+small extra rules in that same sheet (one per part, in a fixed order), each checked the same way: only their own exact
+selectors, only the five font tokens and `font-family` set to a stack from `FONT_STACKS`, sizes and weights only from
+fixed lists, and the whole sheet at most 4,608 bytes (`TYPE_MAX`).
 
 ## Rules for agents
 
@@ -102,5 +109,6 @@ the tool's logging off for one run.
 ## After Claude restarts
 
 The helper is gone with Claude. `status` shows `helper: none` and may offer "Reapply <skin>?". Offer it to the user;
-it needs one tick. Nothing is ever reapplied automatically. Type also starts off after a restart: after applying a
-skin, run `type on` to enable it again.
+it needs one tick. Nothing is reapplied without that tick. Within the tick run that applies the skin, the remembered sidebar
+headers and font (if any) come back by themselves through the new helper, with no second tick; the run prints a
+`restore:` line saying what came back or what could not.

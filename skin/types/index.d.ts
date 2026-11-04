@@ -11,8 +11,20 @@ export type TickCard = {
   nudged: boolean
 }
 
+// The /skin fonts card (4 Nov 2026): null when closed. look: the part ids the helper proved when last read (null =
+// not proven); picks: the dropdown choices per section (not yet applied); status: the last one-line answer.
+export type FontPicks = { font: string; size: string; weight: string }
+export type FontsCard = {
+  helper: string
+  look: string[] | null
+  section: 'all' | 'chat' | 'rows' | 'headers' | 'ui'
+  picks: { all: FontPicks; chat: FontPicks; rows: FontPicks; headers: FontPicks; ui: FontPicks }
+  status: string
+  busy: boolean
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    skin: { card: TickCard | null }
+    skin: { card: TickCard | null; fontsCard: FontsCard | null }
   }
 }

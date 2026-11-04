@@ -223,7 +223,16 @@ TICK.guardBFirstS = Math.ceil(TICK.applyMs / 1_000)
 // clicks OK on its message, however late that is.
 TICK.guardBTries = 30
 TICK.guardAFirstS = Math.ceil((TICK.windowMs + 30_000) / 1_000)
-TICK.runLimitMs = 15_000 + TICK.windowMs + TICK.applyMs + TICK.confirmMs + 20_000 // preparation + window + apply + the helper's proof + cleanup
+// restoreMs (3 Nov 2026): after a tick, bringing back the remembered headers and font, one helper answer each (12 s
+// each; a change that takes longer still finishes inside Claude and is reported as not answered). Keeps the run inside
+// the mod's 180 s allowance.
+TICK.restoreMs = 2 * 12_000
+TICK.runLimitMs = 15_000 + TICK.windowMs + TICK.applyMs + TICK.confirmMs + TICK.restoreMs + 20_000 // preparation + window + apply + the helper's proof + restore + cleanup
+// A combined tick line (3 Nov 2026, `tick <preset> --want-font=... --want-type=...`): its font and type parts get the
+// client's full slot wait each (30 s, more than the helper's own 26 s deadline per change) instead of the 12 s restore wait.
+// 210 s; the mod allows 225 s for such a run.
+TICK.wantMs = 30_000
+TICK.runLimitWantsMs = TICK.runLimitMs - TICK.restoreMs + 2 * TICK.wantMs
 
 export const NO_CHROME_GUARD_FIRST_S = Math.ceil((2 * T.syncOsaMs + T.watchMs + T.pauseMs + T.readMs + T.skinKillMs + 1_000) / 1_000)
 export async function closeMessageThenApply({ watch, read, runSkin, stopped = () => false, now = Date.now, sleep = (t) => new Promise((r) => setTimeout(r, t)), times = NO_CHROME_TIMES }) {
@@ -677,7 +686,7 @@ export const CLAUDE_BINARY = '/Applications/Claude.app/Contents/MacOS/Claude'
 // (names, markers, actions). A helper of another generation is still running OLD code inside Claude: switching through
 // it, checking through it or ticking a new one beside it could leave two skins on, so every path refuses until Claude
 // is quit and reopened (which ends the old helper and its colours).
-export const HELPER_GEN = 3
+export const HELPER_GEN = 8
 export const OUTDATED_WHY = 'Reskin was updated after the colour helper inside Claude started. Quit and reopen Claude once (that ends the old helper and its colours), then run /skin again.'
 export function liveSession(fs, dir, proc, { uid = process.getuid(), claudeStart } = {}) {
   // A folder or session file that cannot be trusted is not proof of a running helper: a helper lives only inside the
@@ -762,11 +771,507 @@ export async function sendSwitch(fs, dir, session, action, { uid = process.getui
   return { nonce, ack }
 }
 
-// P5: remember the preference, never the permission. Only a preset name (or nothing) is kept, and whether type was on.
+// P5: remember the preference, never the permission. Only a preset name (or nothing) is kept, whether type was on, and
+// the font (a name from FONT_STACKS, an old name from FONT_ALIASES read as its new one, or nothing).
 export function readPrefs(fs, dir, uid = process.getuid()) {
   const r = readPrivateJson(fs, `${dir}/prefs.json`, { uid, max: 1024 })
   const last = r.value?.last
-  return { last: typeof last === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(last) ? last : null, type: r.value?.type === true }
+  const font = r.value?.font
+  // The font may be a whole look (font picker, 4 Nov 2026): kept only when it is exactly a canonical look key.
+  return { last: typeof last === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(last) ? last : null, type: r.value?.type === true, font: typeof font !== 'string' ? null : parseLook(font) !== null ? font : Object.hasOwn(FONT_ALIASES, font) ? FONT_ALIASES[font] : null }
+}
+
+// Fonts (3 Nov 2026): the reviewed stacks, by short name. Every name is installed on the owner's Mac; only lato
+// has no Greek letters (Greek text falls back to the system font, accepted).
+export const FONT_STACKS = Object.freeze({
+  'inter-tight': 'Inter Tight, system-ui, sans-serif',
+  literata: 'Literata, system-ui, sans-serif',
+  plex: 'IBM Plex Sans, system-ui, sans-serif',
+  noto: 'Noto Sans, system-ui, sans-serif',
+  roboto: 'Roboto, system-ui, sans-serif',
+  lato: 'Lato, system-ui, sans-serif',
+  'zen-maru': 'Zen Maru Gothic, system-ui, sans-serif',
+})
+// Where each font can be downloaded for free (all seven are under the SIL Open Font License, google/fonts `ofl/`).
+// Reskin ships names only, never font files.
+export const FONT_LINKS = Object.freeze({
+  'inter-tight': 'https://fonts.google.com/specimen/Inter+Tight',
+  literata: 'https://fonts.google.com/specimen/Literata',
+  plex: 'https://fonts.google.com/specimen/IBM+Plex+Sans',
+  noto: 'https://fonts.google.com/specimen/Noto+Sans',
+  roboto: 'https://fonts.google.com/specimen/Roboto',
+  lato: 'https://fonts.google.com/specimen/Lato',
+  'zen-maru': 'https://fonts.google.com/specimen/Zen+Maru+Gothic',
+})
+// Old names that quietly mean a current font (3 Nov 2026: Inter Tight replaced Inter, and "inter" or "Inter" typed, or a
+// remembered "inter", means Inter Tight). Exact keys only.
+export const FONT_ALIASES = Object.freeze({ inter: 'inter-tight' })
+// The family name of a stack (its first entry): what the installed check asks for and the health check compares.
+export const fontFamily = (key) => FONT_STACKS[fontBase(key)].split(',')[0].trim()
+// What the user typed -> a table name, or null. Takes the short name or the full family name, in any case, with
+// spaces, plus signs or dashes ("IBM Plex Sans", "ibm+plex+sans", "zen-maru-gothic").
+export function fontName(typed) {
+  const slug = String(typed ?? '').trim().toLowerCase().replace(/[\s+_]+/g, '-').replace(/-+/g, '-')
+  if (Object.hasOwn(FONT_STACKS, slug)) return slug
+  if (Object.hasOwn(FONT_ALIASES, slug)) return FONT_ALIASES[slug]
+  return Object.keys(FONT_STACKS).find((n) => fontFamily(n).toLowerCase().replace(/\s+/g, '-') === slug) ?? null
+}
+// Read-only: does macOS list this family? A fixed script; the family comes in as an argument, never inside the script.
+export const FONT_INSTALLED_JXA = 'ObjC.import("AppKit"); function run(argv) { const a = ObjC.deepUnwrap($.NSFontManager.sharedFontManager.availableFontFamilies); return Array.isArray(a) && a.includes(argv[0]) ? "yes" : "no" }'
+// osascript's answer -> 'yes' | 'no' | 'failed' (timed out, did not run, or said anything else).
+export function fontInstalled(r) {
+  if (!r || r.error || r.status !== 0) return 'failed'
+  const out = String(r.stdout ?? '').trim()
+  return out === 'yes' || out === 'no' ? out : 'failed'
+}
+// Text sizes for the chat text, in px, offered with a font (`/skin font plex 14`), and the line height for each
+// (12 to 16 since 3 Nov 2026; 17 and 18 dropped, so HELPER_GEN 7 refuses a helper that may still hold them). Claude's
+// own Transcript text size gives 14/20, 15/21 and 16/22 (size probes 3 Nov 2026): line height is always size + 6.
+export const FONT_SIZES = Object.freeze([12, 13, 14, 15, 16])
+export const SIZE_LEADING = Object.freeze({ 12: 18, 13: 19, 14: 20, 15: 21, 16: 22 })
+// A font key names one font sheet: the font alone (Claude's own size) or with a size, `plex` or `plex-16`. It is what
+// the helper offers, is asked for, proves, and what prefs keep. No font name ends in a dash and digits (tested).
+export const fontKey = (name, size = null) => (size === null ? name : `${name}-${size}`)
+// A key -> { name, size } (size null = Claude's own), or null when it is not exactly a reviewed font or font and size.
+export function splitFontKey(key) {
+  if (typeof key !== 'string') return null
+  if (Object.hasOwn(FONT_STACKS, key)) return { name: key, size: null }
+  const m = /^(.+)-(\d{2})$/.exec(key)
+  if (m === null || !Object.hasOwn(FONT_STACKS, m[1]) || !FONT_SIZES.map(String).includes(m[2])) return null
+  return { name: m[1], size: Number(m[2]) }
+}
+// The font name inside a key (for the family, the installed check and the download link); the key itself otherwise.
+export const fontBase = (key) => splitFontKey(key)?.name ?? key
+// Every key a copy with fonts offers, in a fixed order: each font alone, then with each size.
+export const FONT_KEYS = Object.freeze(Object.keys(FONT_STACKS).flatMap((n) => [n, ...FONT_SIZES.map((z) => fontKey(n, z))]))
+
+// Font picker (4 Nov 2026). A LOOK is a list of part ids,
+// at most one per slot, in the fixed LOOK_ORDER: `<section>.<kind>.<value>`, for example chat.font.literata,
+// chat.size.16, rows.weight.300, headers.size.16, ui.font.plex (ui = everything else). Each part is one small checked
+// rule set (skin.mjs lookPartCss); the helper joins the parts in this order. A look key is the canonical text of a look:
+// today's font keys where they say the same (`plex` = [ui.font.plex], `plex-16` = [ui.font.plex, chat.size.16]), else
+// the ids joined by `~`. The empty look is null (nothing in the slot but the header sheet, if on).
+export const FONT_WEIGHTS = Object.freeze({
+  // Only weights each installed family really has (font files, 4 Nov 2026): Lato has no 500 or 600, Zen Maru Gothic no 600.
+  'inter-tight': [300, 400, 500, 600], literata: [300, 400, 500, 600], plex: [300, 400, 500, 600], noto: [300, 400, 500, 600],
+  roboto: [300, 400, 500, 600], lato: [300, 400], 'zen-maru': [300, 400, 500],
+})
+export const SECTIONS = Object.freeze({
+  ui: Object.freeze({ label: 'Everything else', help: 'menus, buttons, settings and the rest', sizes: [], weights: [] }),
+  chat: Object.freeze({ label: 'Chat text', help: 'replies and the message box', sizes: FONT_SIZES, weights: [300, 400, 500] }),
+  rows: Object.freeze({ label: 'Sidebar rows', help: 'session names and the other sidebar row text', sizes: [12, 13, 14, 15], weights: [300, 400, 500] }),
+  headers: Object.freeze({ label: 'Project headers', help: 'the project names in the sidebar', sizes: [12, 13, 14, 15, 16], weights: [400, 500, 600] }),
+})
+export const LOOK_ORDER = Object.freeze(['ui.font', 'chat.font', 'chat.size', 'chat.weight', 'rows.font', 'rows.size', 'rows.weight', 'headers.font', 'headers.size', 'headers.weight'])
+// Every part id there is, in LOOK_ORDER (fonts in FONT_STACKS order, sizes and weights in table order).
+export const LOOK_PARTS = Object.freeze(LOOK_ORDER.flatMap((slot) => {
+  const [sec, kind] = slot.split('.')
+  const vals = kind === 'font' ? Object.keys(FONT_STACKS) : kind === 'size' ? SECTIONS[sec].sizes : SECTIONS[sec].weights
+  return vals.map((v) => `${slot}.${v}`)
+}))
+const PART_SET = new Set(LOOK_PARTS)
+export const slotOf = (id) => id.split('.').slice(0, 2).join('.')
+export const valueOf = (id) => id.split('.')[2]
+// Part ids (in any order, at most one per slot) -> the canonical key, or null for none. Throws on a bad id or a double.
+export function lookKey(ids) {
+  const list = [...ids]
+  for (const id of list) if (!PART_SET.has(id)) throw new Error(`Not a look part: ${String(id).slice(0, 40)}`)
+  const slots = list.map(slotOf)
+  if (new Set(slots).size !== slots.length) throw new Error('A look holds one part per section and kind.')
+  list.sort((a, b) => LOOK_ORDER.indexOf(slotOf(a)) - LOOK_ORDER.indexOf(slotOf(b)))
+  if (list.length === 0) return null
+  if (list.length === 1 && slotOf(list[0]) === 'ui.font') return valueOf(list[0])
+  if (list.length === 2 && slotOf(list[0]) === 'ui.font' && slotOf(list[1]) === 'chat.size') return fontKey(valueOf(list[0]), Number(valueOf(list[1])))
+  return list.join('~')
+}
+// A look key -> the part ids, or null when it is not exactly a canonical look (no reordering, no doubles, no unknown id,
+// no `~` spelling of a look that has a font-key form).
+export function parseLook(key) {
+  if (typeof key !== 'string' || key === '' || key.length > 600) return null
+  const legacy = splitFontKey(key)
+  if (legacy !== null) return legacy.size === null ? [`ui.font.${legacy.name}`] : [`ui.font.${legacy.name}`, `chat.size.${legacy.size}`]
+  const ids = key.split('~')
+  let at = -1
+  for (const id of ids) {
+    if (!PART_SET.has(id)) return null
+    const k = LOOK_ORDER.indexOf(slotOf(id))
+    if (k <= at) return null
+    at = k
+  }
+  return lookKey(ids) === key ? ids : null
+}
+// The font a section really shows: its own, else everything else's, else Claude's (null).
+export function sectionFont(ids, sec) {
+  const own = ids.find((id) => slotOf(id) === `${sec}.font`)
+  const ui = ids.find((id) => slotOf(id) === 'ui.font')
+  return own ? valueOf(own) : ui ? valueOf(ui) : null
+}
+// What is wrong with a look for asking (a weight the section's font does not have), or null. Structure is parseLook's.
+export function lookWhy(ids) {
+  for (const id of ids) {
+    const [sec, kind] = slotOf(id).split('.')
+    if (kind !== 'weight') continue
+    const f = sectionFont(ids, sec)
+    if (f !== null && !FONT_WEIGHTS[f].includes(Number(valueOf(id)))) return `${fontFamily(f)} has no weight ${valueOf(id)} (it has ${FONT_WEIGHTS[f].join(', ')}).`
+  }
+  return null
+}
+// The fonts a look turns on (for the installed check), each once.
+export const lookFonts = (ids) => [...new Set(ids.filter((id) => slotOf(id).endsWith('.font')).map(valueOf))]
+const WEIGHT_WORDS = Object.freeze({ 300: 'light', 400: 'regular', 500: 'medium', 600: 'semibold' })
+export const weightWord = (w) => `${WEIGHT_WORDS[w] ?? 'weight'} ${w}`
+// One plain line per section that has a part, in section order, for the card and the reports. [] for none.
+export function describeLook(ids) {
+  return Object.keys(SECTIONS).flatMap((sec) => {
+    const mine = ids.filter((id) => id.startsWith(`${sec}.`))
+    if (mine.length === 0) return []
+    const get = (kind) => { const p = mine.find((id) => slotOf(id) === `${sec}.${kind}`); return p ? valueOf(p) : null }
+    const f = get('font'), z = get('size'), w = get('weight')
+    const font = f !== null ? fontFamily(f) : sec === 'ui' ? "Claude's font" : 'the same font as everything else'
+    return [`${SECTIONS[sec].label}: ${[font, z !== null ? `${z}px` : null, w !== null ? weightWord(Number(w)) : null].filter(Boolean).join(', ')}`]
+  })
+}
+// The `look set <section> font=.. size=.. weight=..` options -> { want } or { why } ('usage' for the usage line).
+// Defaults: a part's font follows everything else ('same'); everything else and All parts default to Claude's own.
+export function lookSetWants(sec, opts) {
+  const want = { font: sec === 'ui' || sec === 'all' ? 'claude' : 'same', size: 'claude', weight: 'claude' }
+  const given = new Set()
+  for (const o of opts) {
+    const m = /^(font|size|weight)=([a-z0-9-]{1,40})$/.exec(o)
+    if (m === null) return { why: `I did not understand ${String(o).slice(0, 40)}.` }
+    if (given.has(m[1])) return { why: `${m[1]} is given twice.` }
+    given.add(m[1])
+    want[m[1]] = m[1] === 'font' && !['same', 'claude'].includes(m[2]) ? (fontName(m[2]) ?? m[2]) : m[2]
+  }
+  if ((sec === 'ui' || sec === 'all') && want.font === 'same') return { why: `${sec === 'all' ? 'All parts' : 'Everything else'} takes a font name or claude.` }
+  if (sec === 'all' && (given.has('size') || given.has('weight'))) return { why: 'All parts sets the font only; each part keeps its size and weight.' }
+  // A part's "Claude's own" font means following everything else; All parts and everything else keep 'claude' (none).
+  if (sec !== 'ui' && sec !== 'all' && want.font === 'claude') want.font = 'same'
+  return { want }
+}
+// One section's wanted choices merged into a whole look: font (a name, 'same' for none, or 'claude' for ui's none), size
+// and weight (a table number, or 'claude' for none). Returns { ids } or { why }. ui takes a font only.
+export function mergeSection(ids, sec, { font, size = 'claude', weight = 'claude' }) {
+  // All parts (4 Nov 2026, the quick option): one font for the whole app. Every part's own font goes; everything
+  // else takes the font (or Claude's own); sizes and weights stay as they are.
+  if (sec === 'all') {
+    if (String(size) !== 'claude' || String(weight) !== 'claude') return { why: 'All parts sets the font only; each part keeps its size and weight.' }
+    if (font !== 'claude' && !Object.hasOwn(FONT_STACKS, font)) return { why: `No font called ${String(font).slice(0, 40)}.` }
+    const all = [...ids.filter((id) => !slotOf(id).endsWith('.font')), ...(font === 'claude' ? [] : [`ui.font.${font}`])]
+    const why = lookWhy(all)
+    if (why) return { why }
+    const key = lookKey(all)
+    return { ids: key === null ? [] : parseLook(key) }
+  }
+  if (!Object.hasOwn(SECTIONS, sec)) return { why: `No section called ${String(sec).slice(0, 20)}. Sections: all, ${Object.keys(SECTIONS).join(', ')}.` }
+  const keep = ids.filter((id) => !id.startsWith(`${sec}.`))
+  const add = []
+  if (font !== 'same' && font !== 'claude') {
+    if (!Object.hasOwn(FONT_STACKS, font)) return { why: `No font called ${String(font).slice(0, 40)}.` }
+    add.push(`${sec}.font.${font}`)
+  }
+  if (String(size) !== 'claude') {
+    if (!SECTIONS[sec].sizes.map(String).includes(String(size))) return { why: SECTIONS[sec].sizes.length ? `${SECTIONS[sec].label} sizes are ${SECTIONS[sec].sizes.join(', ')} (or claude).` : `${SECTIONS[sec].label} keeps Claude's sizes.` }
+    add.push(`${sec}.size.${size}`)
+  }
+  if (String(weight) !== 'claude') {
+    if (!SECTIONS[sec].weights.map(String).includes(String(weight))) return { why: SECTIONS[sec].weights.length ? `${SECTIONS[sec].label} weights are ${SECTIONS[sec].weights.join(', ')} (or claude).` : `${SECTIONS[sec].label} keeps Claude's weights.` }
+    add.push(`${sec}.weight.${weight}`)
+  }
+  const all = [...keep, ...add]
+  const why = lookWhy(all)
+  if (why) return { why }
+  const key = lookKey(all)
+  return { ids: key === null ? [] : parseLook(key) }
+}
+// What the user typed as one word (`plex`, `ibm-plex-sans-16`, `inter-16`) -> { key } or { why }. A trailing dash and
+// digits is a size: it must be one of FONT_SIZES and follow a font name.
+export const SIZE_WHY = (typed) => `Sizes are ${FONT_SIZES[0]} to ${FONT_SIZES[FONT_SIZES.length - 1]} (Claude's own chat text is 14, 15 or 16), for example font plex 16. Not: ${String(typed).slice(0, 6)}`
+// One parser for every path (the font verb, the one-line command, tick wants): the size is the last token, after exactly
+// one space or dash, digits only; anything else before it (a sign, a doubled dash) is refused, never cleaned up.
+export function fontKeyOf(typed) {
+  const t = String(typeof typed === 'string' ? typed : '').trim()
+  const m = /^(.+?)[- ]([0-9]+)$/.exec(t)
+  if (m !== null) {
+    if (/[-\s+_]$/.test(m[1])) return { why: `Not a font and size: ${t.slice(0, 40)}. Use a name then a size, for example plex 16.` }
+    if (!FONT_SIZES.map(String).includes(m[2])) return { why: SIZE_WHY(m[2]) }
+    const name = fontName(m[1])
+    return name === null ? { why: `No font called ${m[1].slice(0, 40)}.` } : { key: fontKey(name, Number(m[2])) }
+  }
+  const name = fontName(t)
+  return name === null ? { why: `No font called ${t.slice(0, 40)}.` } : { key: name }
+}
+// The one-line command (3 Nov 2026): `[<skin>|off] [font <name...> [size] | font off] [type on|off]`, every part
+// optional, the skin first, font and type in either order, each once. Pure: words in, the parts out, or an Error whose
+// message is the refusal. `isPreset(name)` says whether a preset file exists; `fonts` whether this copy has fonts.
+// font: undefined (not given), 'off', or { name, size } with name from FONT_STACKS and size from FONT_SIZES or null.
+const SET_ALONE = new Set(['list', 'status', 'check', 'about', 'log', 'remove'])
+export const SET_USAGE = 'Use: /skin <skin> font <name> type on|off (each part optional), for example /skin dracula font plex type on.'
+export function parseSetLine(words, { isPreset, fonts = true } = {}) {
+  const w = words.map((x) => String(x).toLowerCase()).filter((x) => x !== '')
+  if (w.length === 0) throw new Error(SET_USAGE)
+  const out = { skin: null, font: undefined, type: undefined }
+  const lone = w.find((x, k) => SET_ALONE.has(x) && !(x === 'list' && w[k - 1] === 'font'))
+  if (lone !== undefined) throw new Error(lone === 'remove' ? 'remove takes everything off; use it on its own (/skin remove).' : `${lone} goes on its own (/skin ${lone}).`)
+  let i = 0
+  if (w[0] !== 'font' && w[0] !== 'type') {
+    if (w[0] !== 'off' && !(/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(w[0]) && isPreset?.(w[0]) === true)) throw new Error(`No skin called ${w[0].slice(0, 40)}. ${SET_USAGE}`)
+    out.skin = w[0]
+    i = 1
+  }
+  while (i < w.length) {
+    const key = w[i]
+    if (key === 'font') {
+      if (out.font !== undefined) throw new Error('font is given twice.')
+      if (!fonts) throw new Error('Fonts are not in this release.')
+      let j = i + 1
+      while (j < w.length && w[j] !== 'type' && w[j] !== 'font') j++
+      const part = w.slice(i + 1, j)
+      if (part.length === 0) throw new Error('font needs a name, for example font plex (or font off). /skin font list shows them.')
+      if (part[0] === 'list') throw new Error('font list goes on its own (/skin font list).')
+      if (part[0] === 'off') {
+        if (part.length > 1) throw new Error(`font off takes nothing after it (got ${part.slice(1).join(' ').slice(0, 40)}).`)
+        out.font = 'off'
+      } else {
+        // The same parser as the font verb and tick wants: `plex 16`, `plex-16` and full names all agree.
+        const k = fontKeyOf(part.join(' '))
+        if (k.why) throw new Error(`${k.why} /skin font list shows them.`)
+        out.font = splitFontKey(k.key)
+      }
+      i = j
+    } else if (key === 'type') {
+      if (out.type !== undefined) throw new Error('type is given twice.')
+      if (w[i + 1] !== 'on' && w[i + 1] !== 'off') throw new Error('type takes on or off, for example type on.')
+      out.type = w[i + 1] === 'on'
+      i += 2
+    } else if (key === 'off' || isPreset?.(key) === true) {
+      throw new Error(`Put the skin name first, for example /skin ${key} font plex.`)
+    } else {
+      throw new Error(`I did not understand ${key.slice(0, 40)}. ${SET_USAGE}`)
+    }
+  }
+  return out
+}
+// A proven type slot pair from the helper: { headers: boolean, font: a font key (`plex`, `plex-16`) or null }.
+// Fonts a helper started by an older copy may still hold and prove (its sheets were fixed at its tick): name -> family.
+// Accepted as proof of what is on, never as a name to ask for; inter was replaced by Inter Tight on 3 Nov 2026.
+export const LEGACY_FONTS = Object.freeze({ inter: 'Inter' })
+export const slotPairOk = (v) => v !== null && typeof v === 'object' && typeof v.headers === 'boolean' && (v.font === null || (typeof v.font === 'string' && (parseLook(v.font) !== null || Object.hasOwn(LEGACY_FONTS, v.font))))
+// Does a helper that offers these part ids offer every part of this look key? (A font key is a look too.)
+export const lookOffered = (key, parts) => { const ids = parseLook(key); return ids !== null && Array.isArray(parts) && ids.every((id) => parts.includes(id)) }
+// The families a font key or look turns on, in plain words ("Literata and Roboto"), or Claude's own when none.
+export function fontLabel(key) {
+  const ids = parseLook(key)
+  if (ids === null) return Object.hasOwn(LEGACY_FONTS, key) ? LEGACY_FONTS[key] : String(key).slice(0, 40)
+  const fams = lookFonts(ids).map(fontFamily)
+  return fams.length === 0 ? "Claude's own font" : fams.length === 1 ? fams[0] : `${fams.slice(0, -1).join(', ')} and ${fams.at(-1)}`
+}
+export const slotFailLine = (what, ack) => `${what} did not complete: ${(ack.errors ?? []).join('; ') || 'no reason given'}${ack.partial ? '. Part of it was undone again' : ''}${ack.verified === 'unknown' ? '. What is on now is not proven: press Cmd-R in Claude, or run /skin check' : ''}.`
+// The one-line command's changes, in order: skin, then font, then type, each once through its own request. Stops at the
+// first part that fails or gets no answer (no rollback). The font and type parts are judged from the LAST proven pair the
+// helper sent: a part a later cleanup took off again says so, and after an unanswered request nothing is called proven.
+// colour(skin) -> null (no answer) or { ok, lines: [main, checks] }; slot(action) -> the helper's answer or null.
+// Returns { failed, final (the proven pair or null), out (report lines), parts (for judgeParts) }.
+export async function runSetParts(line, { colour, slot, colourWaitS, slotWaitS }) {
+  const out = []
+  let failed = false
+  if (line.skin !== null && line.skin !== undefined) {
+    const r = await colour(line.skin)
+    if (r === null) { failed = true; out.push(`skin ${line.skin}: unconfirmed, the colour helper did not answer within ${colourWaitS} s (it may still finish; /skin check shows what is on)`) }
+    else { out.push(`skin ${line.skin}: ${r.lines[0]}`, ...r.lines.slice(1)); if (!r.ok) failed = true }
+  }
+  const parts = []
+  if (line.font !== undefined) {
+    // A typed font (name and size) or a whole look ({ key }, from the picker or a tick's wants).
+    const key = line.font === 'off' ? null : typeof line.font.key === 'string' ? line.font.key : fontKey(line.font.name, line.font.size)
+    const sk = key === null ? null : splitFontKey(key)
+    const label = key === null ? 'font off' : sk !== null ? `font ${sk.name}${sk.size === null ? '' : ` ${sk.size}px`}` : `fonts (${describeLook(parseLook(key)).join('; ')})`
+    parts.push({ label, action: key === null ? 'font-off' : `font-${key}`, is: (v) => v.font === key })
+  }
+  if (line.type !== undefined) parts.push({ label: `type ${line.type ? 'on' : 'off'}`, action: `type-${line.type ? 'on' : 'off'}`, is: (v) => v.headers === line.type })
+  let last = null, voided = false
+  for (const p of parts) {
+    if (failed) { p.state = 'skipped'; continue }
+    const ack = await slot(p.action)
+    if (ack === null || ack === undefined) { p.state = 'noanswer'; failed = true; voided = true; continue }
+    last = ack
+    if (ack.ok === true) p.state = 'sent'
+    else { p.state = 'failed'; p.ack = ack; failed = true }
+  }
+  const final = !voided && last !== null && slotPairOk(last.verified) ? last.verified : null
+  const judged = judgeParts(parts, final, slotWaitS)
+  return { failed: failed || judged.failed, final, out: [...out, ...judged.out], parts }
+}
+// The report of the font and type parts against one final pair (null: nothing proven now). A part sent and answered is
+// "done" only when the final pair still shows it. Used again after a tick's remembered restores, which come later and
+// can take an earlier part off.
+export function judgeParts(parts, final, slotWaitS) {
+  const out = []
+  let failed = false
+  for (const p of parts) {
+    if (p.state === 'skipped') out.push(`${p.label}: not tried (an earlier part did not complete)`)
+    else if (p.state === 'noanswer') out.push(`${p.label}: unconfirmed, the colour helper did not answer within ${slotWaitS} s (it may still finish; /skin check shows what is on)`)
+    else if (p.state === 'failed') out.push(`${p.label}: ${slotFailLine('', p.ack).trim()}`)
+    else if (final === null) { out.push(`${p.label}: done, but not proven now: run /skin check`); failed = true; continue }
+    else if (p.is(final)) { out.push(`${p.label}: done`); continue }
+    else { out.push(`${p.label}: done, then taken off again when a later step failed`); failed = true; continue }
+    failed = true
+  }
+  return { failed, out }
+}
+// After a tick: a combined line's own font and type parts (wants), then the remembered ones it left out (prefs), through
+// the exact new helper. The line's parts go first through runSetParts (font, then type, stop at the first that does not
+// complete); if they all completed, the remembered parts follow as before (each tried, a failure does not stop the
+// other). Everything is reported only at the end, judged from the run's last proven pair, so a later remembered restore
+// that took a part of the line off again, or an unanswered request, is never reported as done. `type` and `font` are the
+// remembered parts still to restore (false / null when none or when the line names that part). send(action, waitMs) ->
+// the helper's answer to exactly that action, or null. Returns { ok (false when a part of the line did not complete),
+// lines (part: and restore: lines), save (the pair to remember, or null to leave prefs alone) }.
+export async function restoreParts({ wants, prefs, type, font, fontShipped, caps, fonts, installed, send, waits }) {
+  const lines = []
+  const say = (m) => lines.push(`restore: ${m}`)
+  const tell = (m) => lines.push(`part: ${m}`)
+  const hasWants = wants.font !== undefined || wants.type !== undefined
+  let lineOk = true, lineRun = null
+  if (hasWants) {
+    // The exact new helper is checked again before anything is sent: it must offer every part that turns something on.
+    const fontOn = wants.font !== undefined && wants.font !== 'off'
+    const why = wants.type === 'on' && !caps.includes('type') ? 'type is not available in this colour helper'
+      : fontOn && (!caps.includes('font') || !fonts.includes(wants.font)) ? `the font ${wants.font} is not available in this colour helper`
+      : fontOn && installed(wants.font) !== 'yes' ? `could not confirm that ${fontLabel(wants.font)} is installed` : null
+    if (why !== null) { tell(`font and type parts not tried (${why}): the skin itself is on.`); lineOk = false }
+    else {
+      const line = { skin: null, font: wants.font === undefined ? undefined : wants.font === 'off' ? 'off' : { key: wants.font }, type: wants.type === undefined ? undefined : wants.type === 'on' }
+      lineRun = await runSetParts(line, {
+        slot: (action) => send(action, waits.want), colourWaitS: 0, slotWaitS: waits.want / 1000,
+      })
+      lineOk = !lineRun.failed
+    }
+    // A part of the line that did not complete: the remembered parts are not sent (they stay remembered).
+    if (!lineOk && (type || font !== null)) {
+      for (const l of lineRun?.out ?? []) tell(l)
+      const f = lineRun?.final ?? null
+      say(`skipped ${[type ? 'the project headers' : null, font !== null ? `the font ${font}` : null].filter(Boolean).join(' and ')} (a part of the line did not complete); they stay remembered`)
+      return { ok: false, lines, save: f === null ? null : { headers: wants.type !== undefined ? f.headers : prefs.type, font: wants.font !== undefined && fontShipped ? f.font : prefs.font } }
+    }
+  }
+  const HEAD = 'the project headers', FONT = font === null ? null : splitFontKey(font) !== null || Object.hasOwn(LEGACY_FONTS, font) ? `the font ${font}` : `the fonts (${fontLabel(font)})`
+  const why = {} // a reason per part that was not sent or not proven
+  let last = null, answered = true, sent = false
+  const one = async (action, words) => {
+    sent = true
+    const ack = await send(action, waits.restore)
+    if (ack === null || ack === undefined) { answered = false; why[words] = 'no answer yet; it may still finish, /skin check shows what is on'; return }
+    last = ack
+    if (!ack.ok) why[words] = (ack.errors ?? [])[0] ?? 'failed'
+  }
+  if (type) { if (caps.includes('type')) await one('type-on', HEAD); else why[HEAD] = 'not in this copy' }
+  if (FONT !== null) {
+    const i = installed(font)
+    if (!caps.includes('font') || !fonts.includes(font)) why[FONT] = 'not in this copy'
+    else if (i !== 'yes') why[FONT] = i === 'no' ? 'not installed on this Mac' : 'could not check that it is installed'
+    else await one(`font-${font}`, FONT)
+  }
+  // Everything is judged from the last proven pair of the whole run: a remembered restore that came later may have
+  // taken a part of the line off again, and after any unanswered request nothing is called proven.
+  const final = !sent ? (lineRun?.final ?? null) : answered && last !== null && slotPairOk(last.verified) ? last.verified : null
+  if (lineRun) {
+    const j = judgeParts(lineRun.parts, final, waits.want / 1000)
+    for (const l of j.out) tell(`${l}${l.endsWith(': done') ? ' (no second tick; as the colour helper reports)' : ''}`)
+    if (j.failed) lineOk = false
+  }
+  const wanted = [type ? HEAD : null, FONT].filter(Boolean)
+  const isBack = (w) => final !== null && (w === HEAD ? final.headers === true : final.font === font)
+  const back = wanted.filter(isBack)
+  const missing = wanted.filter((w) => !isBack(w))
+  // Saved once, from that final pair; a remembered part that did not come back stays remembered for the next try.
+  const save = final === null ? null : { headers: type && missing.includes(HEAD) ? prefs.type : final.headers, font: !fontShipped || (FONT !== null && missing.includes(FONT)) ? prefs.font : final.font }
+  if (back.length > 0) say(`brought back ${back.join(' and ')} (no second tick; as the colour helper reports)`)
+  if (missing.length > 0) say(`could not bring back ${missing.map((w) => `${w} (${why[w] ?? (final === null ? 'not proven' : 'undone again after a later step failed')})`).join(', ')}: the skin itself is on. Run /skin type on or /skin font <name> to try again.`)
+  return { ok: lineOk, lines, save }
+}
+// What Claude's own font menu does while a Reskin font is on, in the words status and font print.
+export const FONT_MENU_LINE ="Claude's own font menu is overridden for body text while a Reskin font is on; code still follows Claude's setting."
+// The check's font line, per kind of text: does the computed family start with the wanted font? Only a stable look
+// counts. A kind not on screen, unreadable or changing is "not checked", never a pass. Never says "rendered": a
+// computed family cannot prove which font file drew each letter.
+const FONT_KINDS = [['paragraph', 'chat text'], ['list', 'reply lists'], ['bold', 'bold'], ['composer', 'message box'], ['sidebarRow', 'sidebar rows']]
+export function fontLines(ack, installed = null) {
+  const font = ack?.font
+  if (font === undefined || font === null) return []
+  if (font === 'unknown') return ['font: unknown sheet in the type slot: run /skin font off']
+  if (typeof font === 'string' && splitFontKey(font) === null && parseLook(font) !== null) return lookLines(ack, installed)
+  const k = typeof font === 'string' ? splitFontKey(font) : null
+  if (typeof font !== 'string' || !(k !== null || Object.hasOwn(LEGACY_FONTS, font))) return ['font: unknown']
+  const want = (k !== null ? fontFamily(font) : LEGACY_FONTS[font]).toLowerCase()
+  const pages = Array.isArray(ack.sample?.pages) ? ack.sample.pages : []
+  const head = `font: ${font} set${installed === 'no' ? ', but not installed now (see Font Book), so the system font shows' : installed === 'failed' ? ' (could not check that it is installed)' : ''}`
+  if (ack.sample?.stable !== true || pages.length === 0) return [`${head} (not checked on the page)`]
+  const first = (fam) => String(fam).split(',')[0].trim().replace(/^["']|["']$/g, '').toLowerCase()
+  const parts = FONT_KINDS.map(([k, words]) => {
+    // A window that could not be read, or has none of this kind on screen, is "not checked" there, never a match.
+    const fams = pages.map((p) => (p && !p.error && p.fonts && typeof p.fonts === 'object' ? p.fonts[k] : undefined))
+    const seen = fams.filter((f) => typeof f === 'string')
+    if (seen.some((f) => first(f) !== want)) return `${words} DO NOT match`
+    if (seen.length === 0) return `${words} not checked`
+    return seen.length === pages.length ? `${words} match` : `${words} match on ${seen.length} of ${pages.length} windows (not checked on the rest)`
+  })
+  return [`${head}: ${parts.join(', ')} (computed font family)`, ...(k?.size ? [sizeLine(k.size, pages)] : [])]
+}
+// The check for a whole look (font picker, 4 Nov 2026): per section that has a part, does each kind of text the sampler
+// read (sample.pages[].look) show the wanted family (first name), size (and line height for chat text) and weight?
+// Every window that shows the kind must match; none shown = not checked, never a pass. Headers: the plain header is
+// compared with the chosen weight; an emphasised one (active or current) with the chosen weight at 500 or more, else
+// 500 while type is on (Claude's own otherwise: not checked).
+const near = (v, want) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v - want) <= 0.05
+const firstFamily = (fam) => String(fam).split(',')[0].trim().replace(/^["']|["']$/g, '').toLowerCase()
+export function lookLines(ack, installed = null) {
+  const ids = parseLook(ack.font)
+  const pages = Array.isArray(ack.sample?.pages) ? ack.sample.pages : []
+  const head = `fonts: ${describeLook(ids).join('; ')}${installed === 'no' ? ' (a font in it is not installed now, so the system font shows there)' : installed === 'failed' ? ' (could not check that its fonts are installed)' : ''}`
+  if (ack.sample?.stable !== true || pages.length === 0) return [`${head} (not checked on the page)`]
+  // One verdict for one kind of text and one test, over every window.
+  const judge = (kind, test) => {
+    const seen = pages.map((p) => (p && !p.error && p.look && typeof p.look === 'object' ? p.look[kind] : undefined)).filter((x) => x !== null && typeof x === 'object')
+    if (seen.length === 0) return 'not checked'
+    if (seen.some((x) => !test(x))) return 'DO NOT match'
+    return seen.length === pages.length ? 'match' : `match on ${seen.length} of ${pages.length} windows`
+  }
+  const get = (sec, kind) => { const p = ids.find((id) => slotOf(id) === `${sec}.${kind}`); return p ? valueOf(p) : null }
+  const lines = []
+  for (const sec of Object.keys(SECTIONS)) {
+    if (!ids.some((id) => id.startsWith(`${sec}.`)) && !(sec !== 'ui' && get('ui', 'font') !== null)) continue
+    const f = sectionFont(ids, sec), z = get(sec, 'size'), w = get(sec, 'weight')
+    const kinds = sec === 'chat' ? [['paragraph', 'chat text'], ['composer', 'message box']] : sec === 'rows' ? [['row', 'session names']] : sec === 'headers' ? [['header', 'headers'], ['headerEmph', 'active headers']] : [['ui', 'buttons']]
+    const parts = []
+    for (const [kind, words] of kinds) {
+      const tests = []
+      if (f !== null) tests.push(['font', (x) => firstFamily(x.family) === fontFamily(f).toLowerCase()])
+      if (z !== null) tests.push(['size', (x) => near(x.size, Number(z)) && (sec !== 'chat' || near(x.line, SIZE_LEADING[z]))])
+      let ww = w === null ? null : Number(w)
+      if (kind === 'headerEmph' && ww !== null && ww < 500) ww = ack.type === 'on' ? 500 : ww
+      if (ww !== null) tests.push(['weight', (x) => near(x.weight, ww)])
+      if (tests.length === 0) continue
+      parts.push(`${words} ${tests.map(([t, fn]) => `${t} ${judge(kind, fn)}`).join(', ')}`)
+    }
+    if (parts.length) lines.push(`  ${SECTIONS[sec].label}: ${parts.join('; ')}`)
+  }
+  return [`${head} (computed family, size and weight)`, ...lines]
+}
+// While a size is on: Claude's own Transcript text size no longer moves chat text.
+export const SIZE_MENU_LINE = "Claude's own Transcript text size has no effect on chat text while a Reskin size is on; /skin font <name> with no size gives it back."
+// The check's size line: the computed size AND line height of chat text and the message box, against the size and its
+// SIZE_LEADING, each within 0.05 px (Claude computes 20.0004px). Not on screen, unreadable or not numbers = not checked.
+const SIZE_KINDS = [['paragraph', 'chat text'], ['composer', 'message box']]
+export function sizeLine(size, pages) {
+  const near = (v, want) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v - want) <= 0.05
+  const parts = SIZE_KINDS.map(([kind, words]) => {
+    const seen = pages.map((p) => (p && !p.error && p.sizes && typeof p.sizes === 'object' ? p.sizes[kind] : undefined)).filter((x) => x !== null && typeof x === 'object' && Number.isFinite(x.size) && Number.isFinite(x.line))
+    if (seen.some((x) => !near(x.size, size) || !near(x.line, SIZE_LEADING[size]))) return `${words} DO NOT match`
+    if (seen.length === 0) return `${words} not checked`
+    return seen.length === pages.length ? `${words} match` : `${words} match on ${seen.length} of ${pages.length} windows (not checked on the rest)`
+  })
+  return `size: ${size}px with ${SIZE_LEADING[size]}px lines: ${parts.join(', ')} (computed size and line height)`
 }
 
 // Tick mode's wait: polls the port until it opens, the window ends, or the run is stopping. A tick exactly at the end of
@@ -881,11 +1386,13 @@ export function ownTestSheets(files, fs) {
 }
 
 // Type (2 Nov 2026): what the type sheet does, in the words the client prints.
-export const TYPE_WHAT = 'bold project headers'
+export const TYPE_WHAT = 'project headers with activity colours'
 // The check's type line: what the helper means to show, against what the pages show (the type marker). Never changes
 // the colour verdict. Only a stable look counts; anything else is "not checked".
 export function typeLine(ack) {
   if (ack?.type !== 'on' && ack?.type !== 'off' && ack?.type !== 'unknown') return null
+  // A font alone also carries the slot marker, so headers off with a font on is nothing to report here (the font lines say it).
+  if (ack.type === 'off' && typeof ack.font === 'string') return null
   const pages = Array.isArray(ack.sample?.pages) ? ack.sample.pages : []
   const read = pages.filter((p) => p && !p.error && typeof p.typeMarker === 'boolean')
   const seen = read.filter((p) => p.typeMarker).length
@@ -903,7 +1410,7 @@ export function typeLine(ack) {
     if (withSide.some((p) => p.typeHeaders === 0)) return `type: sheet on, but it found no project header in the sidebar (Claude may have changed its sidebar): run /skin type off`
     const headers = Math.max(...withSide.map((p) => p.typeHeaders))
     const current = withSide.some((p) => p.typeCurrent > 0)
-    return `type: ${TYPE_WHAT} on (${headers} header(s); ${current ? 'the open chat\'s project is highlighted' : 'no project highlighted now: the open chat\'s project is collapsed or not in the sidebar'})`
+    return `type: ${TYPE_WHAT} on (${headers} header(s); ${current ? 'the open chat\'s project header found' : 'the open chat\'s project header not found now: no chat open, or its project is not in the sidebar'})`
   }
   if (ack.type === 'off') return seen > 0 ? `type: off, but still showing on ${seen} ${of}${unread}: run /skin type off again, or press Cmd-R in Claude` : lost > 0 ? `type: off${unread}` : null
   return `type: unknown sheet (${seen} ${of} show one${unread}): run /skin type off`

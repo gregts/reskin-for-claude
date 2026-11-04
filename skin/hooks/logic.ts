@@ -14,6 +14,9 @@ export type Parsed =
   | { kind: 'status' }
   | { kind: 'check' }
   | { kind: 'type'; on: boolean }
+  | { kind: 'font'; name: string }
+  | { kind: 'fonts'; show: boolean }
+  | { kind: 'set'; skin: string | null; words: string[]; font?: string; type?: boolean; via: Via }
   | { kind: 'about' }
   | { kind: 'log' }
   | { kind: 'off'; via: Via }
@@ -30,11 +33,33 @@ export function parse(args: string, oneClick = true): Parsed {
   if (unknown) return { kind: 'bad', why: `Unknown option ${unknown}. Use --tick${oneClick ? ' or --one-click' : ''}.` }
   if (flags.includes('--tick') && flags.includes('--one-click')) return { kind: 'bad', why: oneClick ? 'Choose one: --tick or --one-click.' : '--one-click is not in this release. Use --tick.' }
   const via: Via = flags.includes('--tick') ? 'tick' : flags.includes('--one-click') ? 'one-click' : 'auto'
-  // Type (2 Nov 2026): bold project headers, the same size as the session names, through the colour helper.
+  // The one-line command (3 Nov 2026): a skin with font or type parts, or font and type together. The tool checks the
+  // whole line; here only its shape, so a tick can carry the parts (--want-font, --want-type).
+  const keys = rest.filter(w => w === 'font' || w === 'type').length
+  const skinFirst = rest[0] !== undefined && rest[0] !== 'font' && rest[0] !== 'type'
+  if ((skinFirst && keys >= 1) || keys >= 2) return parseSet(rest, skinFirst ? rest[0]! : null, via)
+  // Type (2 Nov 2026, look 3 Nov): project headers with activity colours, through the colour helper.
   if (rest[0] === 'type') {
     if (flags.length) return { kind: 'bad', why: 'type takes no options.' }
     if (rest.length !== 2 || (rest[1] !== 'on' && rest[1] !== 'off')) return { kind: 'bad', why: 'Use /skin type on or /skin type off.' }
     return { kind: 'type', on: rest[1] === 'on' }
+  }
+  // Fonts (3 Nov 2026): a body font from the tool's reviewed list, through the colour helper. The tool checks the name.
+  if (rest[0] === 'font') {
+    if (flags.length) return { kind: 'bad', why: 'font takes no options.' }
+    // The full family name works too ("IBM Plex Sans", "ibm+plex+sans"): the words are joined with dashes for the tool.
+    // A size goes after a space or a dash only (plex 16, plex-16), as in the tool; plex+16 and plex_16 are refused here too.
+    if (SIZE_GLUE.test(rest.slice(1).join(' '))) return { kind: 'bad', why: SIZE_GLUE_WHY }
+    const name = rest.slice(1).join('-').replace(/[+_]+/g, '-')
+    if (rest.length < 2 || !NAME.test(name)) return { kind: 'bad', why: `Use /skin font <name> [size 12 to 16] (${FONT_NAMES.join(', ')}), /skin font off or /skin font list.` }
+    return { kind: 'font', name }
+  }
+  // The fonts card (4 Nov 2026): /skin fonts opens it above the message box, /skin fonts off closes it.
+  if (rest[0] === 'fonts') {
+    if (flags.length) return { kind: 'bad', why: 'fonts takes no options.' }
+    if (rest.length === 1) return { kind: 'fonts', show: true }
+    if (rest.length === 2 && rest[1] === 'off') return { kind: 'fonts', show: false }
+    return { kind: 'bad', why: 'Use /skin fonts to open the fonts card (/skin fonts off closes it).' }
   }
   if (rest.length > 1) return { kind: 'bad', why: 'One skin name at a time, for example /skin dracula.' }
   const word = rest[0] ?? ''
@@ -47,6 +72,40 @@ export function parse(args: string, oneClick = true): Parsed {
   if (word === 'remove') return { kind: 'remove', via }
   if (!NAME.test(word)) return { kind: 'bad', why: 'A skin name has only letters, digits and hyphens, for example dracula or catppuccin-latte.' }
   return { kind: 'apply', name: word, via }
+}
+
+const SIZE_GLUE = /[+_]+[0-9]+$/
+const SIZE_GLUE_WHY = 'Put a space before the size, for example /skin font plex 16.'
+const SET_USAGE = 'Use: /skin <skin> font <name> type on|off (each part optional), for example /skin dracula font plex type on.'
+function parseSet(rest: string[], skin: string | null, via: Via): Parsed {
+  const bad = (why: string): Parsed => ({ kind: 'bad', why })
+  if (via === 'one-click') return bad('A combined line works with --tick only.')
+  if (skin !== null && skin !== 'off' && !NAME.test(skin)) return bad(`A skin name has only letters, digits and hyphens. ${SET_USAGE}`)
+  if (via === 'tick' && (skin === null || skin === 'off')) return bad('--tick goes with a skin name, for example /skin dracula font plex --tick.')
+  let font: string | undefined
+  let type: boolean | undefined
+  let i = skin === null ? 0 : 1
+  while (i < rest.length) {
+    if (rest[i] === 'font') {
+      if (font !== undefined) return bad('font is given twice.')
+      let j = i + 1
+      while (j < rest.length && rest[j] !== 'font' && rest[j] !== 'type') j++
+      const part = rest.slice(i + 1, j)
+      if (part.length === 0) return bad('font needs a name, for example font plex (or font off).')
+      // A size (`font plex 16`) rides along as the last word: joined with a dash it is the font key the tool checks (plex-16).
+      if (SIZE_GLUE.test(part.join(' '))) return bad(SIZE_GLUE_WHY)
+      const name = part.join('-').replace(/[+_]+/g, '-')
+      if (!NAME.test(name)) return bad(`Not a font name: ${part.join(' ')}. /skin font list shows them.`)
+      font = name
+      i = j
+    } else if (rest[i] === 'type') {
+      if (type !== undefined) return bad('type is given twice.')
+      if (rest[i + 1] !== 'on' && rest[i + 1] !== 'off') return bad('type takes on or off, for example type on.')
+      type = rest[i + 1] === 'on'
+      i += 2
+    } else return bad(`I did not understand ${rest[i]}. ${SET_USAGE}`)
+  }
+  return { kind: 'set', skin, words: rest, ...(font !== undefined ? { font } : {}), ...(type !== undefined ? { type } : {}), via }
 }
 
 // The tool folder: the `toolDir` option first, then beside the mod (the one-repo layout), then one level up.
@@ -91,7 +150,7 @@ export function modeOf(css: string): Preset['mode'] {
 // First-time step (A1): the Developer menu only exists once Developer Mode is on. Same words everywhere.
 export const DEV_MODE = 'First time only: in Claude choose Help › Troubleshooting › Enable Developer Mode (Claude restarts); the Developer menu then appears.'
 
-export function listText(presets: readonly Preset[], macMode: 'dark' | 'light' | 'unknown'): string {
+export function listText(presets: readonly Preset[], macMode: 'dark' | 'light' | 'unknown', fonts = false): string {
   const names = (mode: Preset['mode']) => presets.filter(p => p.mode === mode).map(p => p.name).join(', ') || 'none'
   // Since 17 Oct 2026 every shipped skin has both halves; the one-mode lines show only when such a file is present.
   const some = (mode: Preset['mode']) => presets.some(p => p.mode === mode)
@@ -101,13 +160,14 @@ export function listText(presets: readonly Preset[], macMode: 'dark' | 'light' |
     ...(some('light') ? [`Light only: ${names('light')}`] : []),
     ...(some('unknown') ? [`Other (mode not recognised): ${names('unknown')}`] : []),
     `${macMode === 'unknown' ? 'I could not read your Mac\'s appearance' : `Your Mac is in ${macMode} mode`}. Claude follows the Mac only when Settings > Appearance is System${some('dark') || some('light') ? '; a dark-only or light-only skin shows only while Claude looks that way' : ''}.`,
-    '/skin <name> applies one: the first needs one tick of Developer > Enable Main Process Debugger, later switches need none until Claude quits. /skin off, /skin remove, /skin status, /skin check. /skin type on makes the project headers bold.',
+    '/skin <name> applies one: the first needs one tick of Developer > Enable Main Process Debugger, later switches need none until Claude quits. /skin off, /skin remove, /skin status, /skin check. /skin type on colours the project headers by activity. One line can set several at once, for example /skin dracula type on.',
+    ...(fonts ? ['/skin font list shows the body fonts; /skin font <name> switches to one (no tick), /skin font off goes back to Claude\'s own. /skin fonts opens a row to choose each part\'s font, size and weight.'] : []),
     DEV_MODE,
   ].join('\n')
 }
 
 // The report lines every run prints (sampled colour checks, debugger, helper), and the few other lines worth showing.
-const KEEP = [/^sampled colour checks:/, /^debugger:/, /^helper:/, /^switch unconfirmed/, /^If the colours did not change/, /^Reapply /, /^requests:/, /^last skin:/, /^To apply /]
+const KEEP = [/^sampled colour checks:/, /^debugger:/, /^helper:/, /^switch unconfirmed/, /^If the colours did not change/, /^Reapply /, /^requests:/, /^last skin:/, /^To apply /, /^restore:/, /^part:/]
 const keep = (lines: string[]) => lines.filter(l => KEEP.some(re => re.test(l)))
 
 // Turns the script's output into a short plain answer. The script ends with two machine-readable lines
@@ -238,8 +298,11 @@ export const ABOUT = [
   'Reskin sends nothing online and changes no Claude files.',
   'Skins switch with no click until Claude quits. /skin off removes colours; /skin remove removes colours, type changes and the helper. Quitting Claude clears both.',
   '',
-  'Type is optional and starts off. Apply a skin first to start the helper, then use /skin type on. It sets project headers to 14px at weight 600 and the shared sidebar row text size to 13px, which can affect other sidebar text. The current chat\'s project uses the accent while its chat row is shown; collapsing the project can remove the highlight. /skin type off removes the type changes.',
+  'Type is optional and starts off. Apply a skin first to start the helper, then use /skin type on. It sets project headers to 14px: quiet projects in the main text colour at weight 400; projects with a session running, waiting or unread in the accent at weight 500; the current chat\'s project also in the accent at 500 with a thin accent stripe at the left of its header. It sets the shared sidebar row text size to 13px, which can affect other sidebar text. /skin type off removes the type changes.',
   'After updating Reskin, quit and reopen Claude, apply a skin again, then run /skin type on if you want the type changes.',
+  '',
+  'Fonts (in copies that have them) are optional too: /skin font list, /skin font <name> [size], /skin font off. A size from 12 to 16 (for example /skin font plex 14) sets chat text and the message box only; while it is on, Claude\'s own Transcript text size has no effect on them. A font changes chat text, replies, the message box, buttons and the sidebar; code and the large serif titles stay Claude\'s. Reskin checks the font is installed first. While one is on, Claude\'s own font menu has no effect on that text. After Claude restarts, the next skin brings the headers and font back by itself.',
+  'One line can set several parts at once: /skin dracula font plex type on. Reskin checks the whole line first and changes nothing if any part is wrong; then it sets the skin, the font and the headers in that order, stops at the first part that does not work, and says what is on. Without a colour helper the line needs one tick, as a skin does.',
   '',
   'Every /skin run except /skin about and /skin log is saved for troubleshooting in ~/Library/Logs/Reskin/skin.log (known secret formats removed). /skin log shows the last few.',
   '',
@@ -261,9 +324,17 @@ export function oneClickOf(releaseJson: string | null): boolean {
   if (releaseJson === null) return true
   try { return JSON.parse(releaseJson)?.oneClick === true } catch { return false }
 }
-export const argumentHintOf = (oneClick: boolean) => `[name | off | remove | status | check | type on|off | list | log | about] [--tick${oneClick ? ' | --one-click' : ''}]`
+// The font switch: a release.json present means no fonts unless it says "font": true; no file = the owner's own copy.
+export function fontsOf(releaseJson: string | null): boolean {
+  if (releaseJson === null) return true
+  try { return JSON.parse(releaseJson)?.font === true } catch { return false }
+}
+export const argumentHintOf = (oneClick: boolean, fonts = false) => `[name | off | remove | status | check | type on|off${fonts ? ' | font <name>|off|list | fonts' : ''} | list | log | about] [--tick${oneClick ? ' | --one-click' : ''}]`
 
-export function skinSuggestions(text: string, start: number, cursor: number, skins: readonly string[], oneClick = true): Suggestion[] {
+// The font names the tool offers (FONT_STACKS in skin-tool/skin-lib.mjs), for the typeahead only: the tool checks every name.
+export const FONT_NAMES = ['inter-tight', 'literata', 'plex', 'noto', 'roboto', 'lato', 'zen-maru'] as const
+
+export function skinSuggestions(text: string, start: number, cursor: number, skins: readonly string[], oneClick = true, fonts = false): Suggestion[] {
   const head = /^\s*\/skin\s+/i.exec(text)
   if (head === null || start < head[0].length || cursor < start) return []
   // Mid-word (more letters right after the cursor): taking a row would leave the tail behind, so offer nothing.
@@ -271,11 +342,17 @@ export function skinSuggestions(text: string, start: number, cursor: number, ski
   const t = text.slice(start, cursor).toLowerCase()
   if (t === '') return []
   const args = (row: string) => `${text.slice(head[0].length, start)}${row}${text.slice(cursor)}`
+  // After `font`: the font names, off and list (only where fonts are shipped), never skin names.
+  if (/^font\s+$/i.test(text.slice(head[0].length, start))) {
+    if (!fonts || t.startsWith('-')) return []
+    const rows = [...FONT_NAMES.map(f => ({ text: f, description: 'font' })), { text: 'off' }, { text: 'list' }].filter(r => r.text !== t)
+    return [...rows.filter(r => r.text.startsWith(t)), ...rows.filter(r => !r.text.startsWith(t) && r.text.includes(t))].slice(0, MAX_SUGGESTIONS)
+  }
   // A flag on its own is fine as long as a name can still follow it.
   const ok = (row: string) => parse(args(row)).kind !== 'bad' || (row.startsWith('--') && parse(`${args(row)} x`).kind !== 'bad')
   const rows: Suggestion[] = t.startsWith('-')
     ? FLAGS.filter(f => oneClick || f !== '--one-click').map(f => ({ text: f }))
-    : [...skins.filter(isSkinName).map(s => ({ text: s, description: 'skin' })), ...VERBS.map(v => ({ text: v }))]
+    : [...skins.filter(isSkinName).map(s => ({ text: s, description: 'skin' })), ...VERBS.map(v => ({ text: v })), ...(fonts ? [{ text: 'fonts', description: 'fonts card' }] : [])]
   const fits = rows.filter(r => r.text !== t && ok(r.text))
   const starts = fits.filter(r => r.text.startsWith(t))
   const contains = t.startsWith('-') ? [] : fits.filter(r => !r.text.startsWith(t) && r.text.includes(t))

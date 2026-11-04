@@ -18,7 +18,7 @@ import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HELPER_GEN, TICK, claudePidOf, parseListener, socketOwner, tcpProbe, waitForTick } from './skin-lib.mjs'
+import { FONT_STACKS, FONT_SIZES, SIZE_LEADING, splitFontKey, LOOK_PARTS, LOOK_ORDER, parseLook, slotOf, HELPER_GEN, TICK, claudePidOf, parseListener, socketOwner, tcpProbe, waitForTick } from './skin-lib.mjs'
 
 const PORT = 9229
 const HOST = '127.0.0.1'
@@ -429,6 +429,82 @@ const HEALTH_PAGE = `(() => {
     // Type (numbers only): how many project headers the type sheet's header rule and current-project rule find now.
     typeHeaders: side ? side.querySelectorAll('.df-label-inset h3 span.inline-block.whitespace-nowrap').length : 0,
     typeCurrent: (() => { try { return side ? side.querySelectorAll('div.isolate.rounded-lg:has([aria-current=page]) > div > div > .df-label-inset h3 span.inline-block.whitespace-nowrap').length : 0 } catch { return -1 } })(),
+    // Fonts (font names only, never page text): the computed family of the first visible element of each kind, or null.
+    fonts: (() => {
+      const shown = (el) => { try { return el.getClientRects().length > 0 && (typeof el.checkVisibility !== 'function' || el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) } catch { return false } }
+      const fam = (root, sel) => { try { for (const el of [...(root ? root.querySelectorAll(sel) : [])].slice(0, 50)) if (shown(el)) return String(getComputedStyle(el).fontFamily).slice(0, 200); return null } catch { return null } }
+      const main = q('.dframe-content') ?? document.body
+      return { paragraph: fam(main, 'p'), list: fam(main, 'li'), bold: fam(main, 'strong'), composer: fam(document, '.ProseMirror, [contenteditable=true]'), sidebarRow: fam(side, '[data-row]') }
+    })(),
+    // Sizes (numbers only, never page text): computed font size and line height in px of the first visible chat
+    // paragraph and of the message box, or null (none on screen, or not a plain px number).
+    // Only text really on screen counts: visible to the browser, and at least 4x4 px of it inside the window and inside
+    // every scrolling or clipping box above it (an off-screen paragraph never stands in for the one shown). Chat text is
+    // a reply paragraph (inside Claude's markdown block .prose, not inside an editor); none on screen means not checked.
+    sizes: (() => {
+      const shown = (el) => {
+        try {
+          if (el.getClientRects().length === 0 || (typeof el.checkVisibility === 'function' && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true }))) return false
+          const r = el.getBoundingClientRect()
+          let l = Math.max(r.left, 0), t = Math.max(r.top, 0), rr = Math.min(r.right, innerWidth), b = Math.min(r.bottom, innerHeight)
+          let n = 0
+          for (let a = el.parentElement; a && n < 60; a = a.parentElement, n++) {
+            const c = getComputedStyle(a)
+            if (c.overflowX === 'visible' && c.overflowY === 'visible') continue
+            const ar = a.getBoundingClientRect()
+            l = Math.max(l, ar.left); t = Math.max(t, ar.top); rr = Math.min(rr, ar.right); b = Math.min(b, ar.bottom)
+          }
+          return n < 60 && rr - l >= 4 && b - t >= 4
+        } catch { return false }
+      }
+      const num = (v) => { const m = /^([0-9]+(?:[.][0-9]+)?)px$/.exec(String(v)); return m ? Number(m[1]) : null }
+      const one = (root, sel) => {
+        try {
+          for (const el of [...(root ? root.querySelectorAll(sel) : [])].slice(0, 50)) {
+            if (!shown(el)) continue
+            const c = getComputedStyle(el), size = num(c.fontSize), line = num(c.lineHeight)
+            return size === null || line === null ? null : { size, line }
+          }
+          return null
+        } catch { return null }
+      }
+      // A reply paragraph: inside Claude's rendered markdown block (.prose), not inside an editor. None = not checked.
+      let chat = []
+      try { chat = [...document.querySelectorAll('.prose p')].filter((p) => !p.closest('.ProseMirror, [contenteditable]')) } catch {}
+      const first = (els) => { try { for (const el of els.slice(0, 50)) if (shown(el)) { const c = getComputedStyle(el), size = num(c.fontSize), line = num(c.lineHeight); return size === null || line === null ? null : { size, line } } return null } catch { return null } }
+      return { paragraph: first(chat), composer: one(document, '.ProseMirror, [contenteditable=true]') }
+    })(),
+    // Font picker (4 Nov 2026): per section, the first shown element of each kind (font names and numbers only, never
+    // page text): family, size, line height, weight. Chat: a reply paragraph and the message box (the same selector the
+    // chat parts use). Rows: the first text span inside a session row button that is not an icon. Headers: the first
+    // header of a project that is neither active nor current (plain), and the first that is (emphasised). Everything
+    // else: the first shown button in the chat area. null = none shown.
+    look: (() => {
+      const shown = (el) => {
+        try {
+          if (el.getClientRects().length === 0 || (typeof el.checkVisibility === 'function' && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true }))) return false
+          const r = el.getBoundingClientRect()
+          return r.width >= 4 && r.height >= 4 && r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight
+        } catch { return false }
+      }
+      const num = (v) => { const m = /^([0-9]+(?:[.][0-9]+)?)(px)?$/.exec(String(v)); return m ? Number(m[1]) : null }
+      const read = (el) => { const c = getComputedStyle(el); return { family: String(c.fontFamily).slice(0, 200), size: num(c.fontSize), line: num(c.lineHeight), weight: num(c.fontWeight) } }
+      const icon = (el) => { try { return !!el.closest('[data-cds=Icon], svg') || /anthropicons/i.test(getComputedStyle(el).fontFamily) } catch { return true } }
+      const ownText = (el) => { for (const n of el.childNodes) if (n.nodeType === 3 && n.data.trim() !== '') return true; return false }
+      const firstOf = (list, ok = () => true) => { try { for (const el of list.slice(0, 80)) if (ok(el) && shown(el)) return read(el) } catch {} return null }
+      const all = (root, sel) => { try { return root ? [...root.querySelectorAll(sel)] : [] } catch { return [] } }
+      let chat = []
+      try { chat = [...document.querySelectorAll('.prose p')].filter((p) => !p.closest('.ProseMirror, [contenteditable]')) } catch {}
+      const rowText = () => { for (const b of all(side, 'button[data-row], [data-row] button').slice(0, 60)) { for (const el of [b, ...b.querySelectorAll('*')].slice(0, 40)) if (!icon(el) && ownText(el) && shown(el)) return read(el) } return null }
+      const H = '.df-label-inset h3 span.inline-block.whitespace-nowrap'
+      const hot = (el) => { try { return !!el.closest('div.isolate.rounded-lg:has([data-cds=Pulse]), div.isolate.rounded-lg:has([aria-current=page])') } catch { return true } }
+      return {
+        paragraph: firstOf(chat), composer: firstOf(all(document, '.ProseMirror[contenteditable=true]')),
+        row: rowText(),
+        header: firstOf(all(side, H), (el) => !hot(el)), headerEmph: firstOf(all(side, H), hot),
+        ui: firstOf(all(q('.dframe-content') ?? document.body, 'button'), (el) => !el.closest('.prose') && !icon(el) && ownText(el)),
+      }
+    })(),
     scheme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
     anchors: { root: !!q('.dframe-root'), sidebar: !!side, content: !!q('.dframe-content'), rows: !!(side && side.querySelector('[data-row]')) },
     parts: {
@@ -565,6 +641,9 @@ const CORE = `const { app, webContents } = ${ELECTRON}
       if (unverified > 0) errors.push('could not confirm the type sheet is gone from ' + unverified + ' page(s): press Cmd-R in the Claude window')
       const q1 = quiet()
       if (leftover === 0 && unverified === 0 && T.gen === gen && errors.length === 0 && q0.pending === 0 && q1.pending === 0 && q0.seq === q1.seq) T.dirty = false
+      // Cleared (fonts, 3 Nov 2026): the full proof above passed for this very run, so no older sheet can come back.
+      // A font change that drops a part waits for this before it puts the rest on.
+      return { eligible: pages.length, applied, reloaded, leftover, unverified, errors, cleared: T.dirty === false && T.gen === gen && T.css === null }
     } else {
       // No Claude window: nothing to show it on, so the request is not kept armed for a later window.
       if (pages.length === 0) { errors.push('no Claude window is open'); if (T.gen === gen) { T.css = null; st.hookDown() } }
@@ -731,7 +810,52 @@ function setCode(css, reset = false, batch = false, quick = false, all = false) 
 // network. Its file checks catch accidents and stale files; any program running as the user could still ask it to switch.
 export function installHelper(st, o) {
   const { fs, dir, presets } = o
-  const typeSheets = o.typeSheets ?? {} // name -> checked type sheet (fixed at injection): today only 'on'
+  // Checked type slot texts (fixed at injection): 'headers' (the header sheet) and the look parts by id (font picker,
+  // 4 Nov 2026). A look key is a font key (`plex`, `plex-16`) or part ids joined by `~` in LOOK_ORDER, one per slot
+  // (skin-lib parseLook and lookKey; the same rules here, as this runs inside Claude and imports nothing).
+  const typeSheets = o.typeSheets ?? {}
+  const ORDER = Array.isArray(o.lookOrder) ? o.lookOrder : []
+  const partIds = Object.keys(typeSheets).filter((k) => k !== 'headers')
+  const has = (id) => id !== 'headers' && Object.hasOwn(typeSheets, id)
+  const slotOf = (id) => id.split('.').slice(0, 2).join('.')
+  const keyOf = (ids) => ids.length === 0 ? null
+    : ids.length === 1 && slotOf(ids[0]) === 'ui.font' ? ids[0].split('.')[2]
+    : ids.length === 2 && slotOf(ids[0]) === 'ui.font' && slotOf(ids[1]) === 'chat.size' ? ids[0].split('.')[2] + '-' + ids[1].split('.')[2]
+    : ids.join('~')
+  // A look key -> its part ids, or null when it is not exactly a canonical key of parts this helper was given.
+  const parseKey = (key) => {
+    if (typeof key !== 'string' || key === '' || key.length > 600) return null
+    if (!key.includes('.')) {
+      if (has('ui.font.' + key)) return ['ui.font.' + key]
+      const m = /^(.+)-([0-9]{2})$/.exec(key)
+      return m && has('ui.font.' + m[1]) && has('chat.size.' + m[2]) ? ['ui.font.' + m[1], 'chat.size.' + m[2]] : null
+    }
+    const ids = key.split('~')
+    let at = -1
+    for (const id of ids) { if (!has(id)) return null; const k = ORDER.indexOf(slotOf(id)); if (k <= at) return null; at = k }
+    return keyOf(ids) === key ? ids : null
+  }
+  // The exact slot text for a pair { headers, font: look key or null }: null = nothing in the slot, undefined = not
+  // something this helper was given. The tool composes the same way (composeType).
+  const compose = (p) => {
+    const ids = p.font === null ? [] : parseKey(p.font)
+    if (ids === null || (p.headers && !Object.hasOwn(typeSheets, 'headers'))) return undefined
+    if (!p.headers && ids.length === 0) return null
+    // The header sheet alone is its own text exactly; with parts, a newline between (as the sheets always were).
+    return (p.headers ? typeSheets.headers + (ids.length ? '\n' : '') : '') + ids.map((id) => typeSheets[id]).join('')
+  }
+  // What the slot holds, decided from its exact text: an empty slot is the empty pair; otherwise only the pair this
+  // helper (or an earlier one of this generation) last PROVED, and only while recomposing it gives exactly that text
+  // (st.type.want: null while a change runs or after one that could not prove its end). null = unknown.
+  const decode = (css) => {
+    // Empty only when proven empty: a cleanup that could not prove itself leaves the slot marked dirty.
+    if (css === null) return typeof st.typeDirty === 'function' && st.typeDirty() ? null : { headers: false, font: null }
+    const w = st.type?.want
+    if (!w || typeof w !== 'object' || typeof w.headers !== 'boolean') return null
+    return compose(w) === css ? { headers: w.headers, font: w.font } : null
+  }
+  const sheetOf = compose
+  const isTypeAction = (a) => a === 'type-off' || a === 'font-off' || (a === 'type-on' && Object.hasOwn(typeSheets, 'headers')) || (a.startsWith('font-') && parseKey(a.slice(5)) !== null)
   const C = fs.constants
   const at = (n) => dir + '/' + n
   const MAX = 4096
@@ -755,8 +879,9 @@ export function installHelper(st, o) {
     try { fs.fchmodSync(fd, 0o600); fs.writeSync(fd, JSON.stringify(value)) } finally { fs.closeSync(fd) } // 600 whatever the umask
     try { fs.renameSync(tmp, at(name)) } catch (e) { try { fs.unlinkSync(tmp) } catch {} throw e }
   }
-  const h = { session: o.randomUUID(), last: 0, requests: 0, ignored: 0, running: false, again: false, stopped: false, watcher: null, timer: null, ino: d0.ino, badKey: null, startedAt: o.now() }
-  const sessionInfo = () => ({ v: 1, session: h.session, pid: o.pid, boot: o.boot, version: o.version, startedAt: h.startedAt, caps: Object.hasOwn(typeSheets, 'on') ? ['check', 'type'] : ['check'], gen: o.gen })
+  const h = { session: o.randomUUID(), last: 0, requests: 0, ignored: 0, running: false, again: false, stopped: false, watcher: null, timer: null, ino: d0.ino, badKey: null, startedAt: o.now(), tid: 0, inner: new Set() }
+  const caps = ['check', ...(Object.hasOwn(typeSheets, 'headers') ? ['type'] : []), ...(partIds.length > 0 ? ['font', 'look'] : [])]
+  const sessionInfo = () => ({ v: 1, session: h.session, pid: o.pid, boot: o.boot, version: o.version, startedAt: h.startedAt, caps, parts: partIds, gen: o.gen })
   const watch = () => {
     try { h.watcher?.close() } catch {}
     h.watcher = null
@@ -793,13 +918,67 @@ export function installHelper(st, o) {
     if (!Number.isSafeInteger(j.nonce) || j.nonce < 1) return bad('nonce is not a positive whole number')
     if (j.nonce === h.last) return { none: true } // already handled
     if (j.nonce < h.last) return bad('an old request')
-    if (typeof j.action !== 'string' || !(j.action === 'off' || j.action === 'remove' || j.action === 'check' || (j.action === 'type-on' && Object.hasOwn(typeSheets, 'on')) || j.action === 'type-off' /* always: a cleanup that only removes */ || Object.hasOwn(presets, j.action))) return bad('not a preset name, off, remove, check, type-on or type-off')
+    // type-off and font-off are always accepted: they only take parts away.
+    if (typeof j.action !== 'string' || !(j.action === 'off' || j.action === 'remove' || j.action === 'check' || isTypeAction(j.action) || Object.hasOwn(presets, j.action))) return bad('not a preset name, off, remove, check, type-on, type-off, font-<name> or font-off')
     return { req: j }
   }
   const ack = (r) => {
     try { writeFile('ack.json', { v: 1, session: h.session, pid: o.pid, version: o.version, requests: h.requests, ignored: h.ignored, ...r }) } catch {}
   }
   const within = (p, ms) => Promise.race([p, new Promise((_, rej) => o.setTimeout(() => rej(new Error('timed out after ' + ms + ' ms')), ms))])
+  // Every type slot step is tracked until it really ends, so a timed-out change never overlaps the next one.
+  const track = (p) => { h.inner.add(p); p.then(() => h.inner.delete(p), () => h.inner.delete(p)); return p }
+  const step = (css) => within(track(st.applyType(css)), 8_000).catch((e) => ({ errors: [String(e)] }))
+  // One type slot change. The helper composes the wanted pair from what
+  // is really in the slot (never from saved preferences). A change that drops a part first clears the slot and needs
+  // the full proof that it is empty (cleared) before it puts the rest on. A failed apply is cleaned up and counts as
+  // empty only once that cleanup is proven too. verified is the pair proven on the pages, or 'unknown'.
+  const EMPTY = { headers: false, font: null }
+  const typeChange = async (action, alive) => {
+    if (typeof st.applyType !== 'function') return { errors: ['this Claude has no type slot yet'], selected: null, verified: 'unknown' }
+    const T = st.type
+    const cur = decode(T.css)
+    const want = { ...(cur ?? EMPTY) }
+    if (action === 'type-on') want.headers = true
+    else if (action === 'type-off') want.headers = false
+    else if (action === 'font-off') want.font = null
+    else want.font = action.slice(5)
+    const css = sheetOf(want)
+    if (css === undefined) return { errors: ['that combination is not available in this copy of Reskin'], selected: want, verified: cur ?? 'unknown' }
+    const drops = cur === null || T.css === null || (cur.headers && !want.headers) || (cur.font !== null && cur.font !== want.font)
+    // While the change runs nothing is proven (a check or a later request reads unknown until it ends well).
+    T.want = null
+    let reloaded = 0
+    // A step starts only if it can finish before the request's deadline (alive(ms)), so nothing lands after the answer.
+    const late = { errors: ['cancelled: not enough time left before the deadline'], selected: want, verified: 'unknown', reloaded }
+    // Time is reserved up front: a clear, then an apply, then a cleanup if the apply fails (8 s each).
+    if (drops && st.typeDirty()) {
+      if (!alive(24_000)) return late
+      const r = await step(null)
+      reloaded += r.reloaded ?? 0
+      if (r.cleared !== true) return { errors: ['could not prove the old type sheet is gone, so nothing new was put on' + ((r.errors ?? []).length ? ': ' + r.errors[0] : '')], selected: want, verified: 'unknown', reloaded }
+    }
+    if (css === null) { if (T.css !== null || st.typeDirty()) return { errors: ['could not prove the type slot is empty'], selected: want, verified: 'unknown', reloaded }; T.want = { ...EMPTY }; return { errors: [], selected: want, verified: EMPTY, reloaded } }
+    if (!alive(16_000)) return { ...late, reloaded }
+    const r2 = await step(css)
+    reloaded += r2.reloaded ?? 0
+    if ((r2.errors ?? []).length === 0 && r2.eligible > 0 && r2.applied === r2.eligible) {
+      // The reviewed success rule stays; the proof is separate: only the exact composed text in the slot
+      // proves the pair (something newer, such as a reset, may have replaced it meanwhile).
+      const proven = T.css === css
+      if (proven) T.want = { headers: want.headers, font: want.font }
+      return { errors: [], selected: want, verified: proven ? want : 'unknown', applied: r2.applied, eligible: r2.eligible, reloaded }
+    }
+    // Failed (on any page): take the sheet out again, so the reload hooks stop putting the failed one back.
+    let verified = 'unknown'
+    if (alive(8_000)) { const r3 = await step(null); reloaded += r3.reloaded ?? 0; if (r3.cleared === true && T.css === null && !st.typeDirty()) { verified = EMPTY; T.want = { ...EMPTY } } }
+    else if (T.css === css) {
+      // No time left to prove a cleanup: still stop the failed sheet at once. The reload hooks stop putting it back, and
+      // a new run number makes any insert still in flight take itself out when it lands. The slot stays marked (dirty).
+      T.css = null; T.dirty = true; T.gen++
+    }
+    return { errors: (r2.errors ?? []).length ? r2.errors : ['the sheet did not show up on every Claude page'], selected: want, verified, partial: true, applied: r2.applied ?? 0, eligible: r2.eligible ?? 0, reloaded }
+  }
   const stop = (removeSession) => {
     h.stopped = true
     try { h.watcher?.close() } catch {}
@@ -831,9 +1010,10 @@ export function installHelper(st, o) {
       let dark = null, digest = null
       try { dark = o.dark() } catch {}
       try { digest = st.css === null ? null : o.digest(st.css) } catch {}
-      const T = st.type
-      const type = !T || T.css === null ? 'off' : T.css === typeSheets.on ? 'on' : 'unknown'
-      ack({ nonce: j.nonce, action: 'check', phase: 'done', ok: sample !== null, errors, current: name, digest, dark, sample, type })
+      const now = decode(st.type?.css ?? null)
+      const type = now === null ? 'unknown' : now.headers ? 'on' : 'off'
+      const font = now === null ? 'unknown' : now.font
+      ack({ nonce: j.nonce, action: 'check', phase: 'done', ok: sample !== null, errors, current: name, digest, dark, sample, type, font })
       return
     }
     if (j.action === 'remove') {
@@ -860,12 +1040,28 @@ export function installHelper(st, o) {
       ack({ nonce: j.nonce, action: 'remove', phase: 'done', ok: errors.length === 0, errors })
       return
     }
-    if (j.action === 'type-on' || j.action === 'type-off') {
-      // The type slot only: the colours are not touched. No samples (the colour checks belong to colour changes).
-      let res
-      try { res = typeof st.applyType === 'function' ? await within(st.applyType(j.action === 'type-on' ? typeSheets.on : null), 8_000) : { errors: ['this Claude has no type slot yet'] } } catch (e) { res = { errors: [String(e)] } }
+    if (isTypeAction(j.action)) {
+      // The type slot only (headers and font): the colours are not touched. No samples (they belong to colour changes).
+      // Work left running by an earlier change that timed out must settle first: its later steps are cancelled, but a
+      // sheet it is still putting in has to land or fail before the slot is read again.
+      // A sheet insert still in flight inside a page (pending) counts too, though the step that started it has given up.
+      const inserts = async () => { for (let i = 0; i < 200 && (st.type?.pending ?? 0) > 0; i++) await new Promise((r) => o.setTimeout(r, 100)); if ((st.type?.pending ?? 0) > 0) throw new Error('busy') }
+      // One deadline for the whole request, settling included (the client waits 30 s): once it passes, no later step runs.
+      let expired = false
+      const endAt = o.now() + 26_000
+      const deadline = new Promise((_, rej) => o.setTimeout(() => { expired = true; rej(new Error('timed out after 26000 ms')) }, 26_000))
+      deadline.catch(() => {})
+      if (h.inner.size > 0 || (st.type?.pending ?? 0) > 0) {
+        try { await Promise.race([Promise.allSettled([...h.inner]).then(inserts), deadline]) } catch {
+          ack({ nonce: j.nonce, action: j.action, phase: 'done', ok: false, errors: ['an earlier type or font change is still running: try again in a moment'], selected: null, verified: 'unknown' })
+          return
+        }
+      }
+      const tid = ++h.tid
+      const alive = (needMs = 0) => tid === h.tid && !h.stopped && !expired && o.now() + needMs <= endAt
+      const res = await Promise.race([track(typeChange(j.action, alive)), deadline]).catch((e) => { if (tid === h.tid) h.tid++; return { errors: [String(e)], selected: null, verified: 'unknown' } }) // the deadline cancels the change's later steps
       if (h.stopped) return
-      ack({ nonce: j.nonce, action: j.action, phase: 'done', ok: (res?.errors ?? []).length === 0, errors: (res?.errors ?? []).slice(0, 5).map(String), applied: res?.applied ?? 0, eligible: res?.eligible ?? 0, reloaded: res?.reloaded ?? 0 })
+      ack({ nonce: j.nonce, action: j.action, phase: 'done', ok: (res.errors ?? []).length === 0, errors: (res.errors ?? []).slice(0, 5).map(String), selected: res.selected ?? null, verified: res.verified ?? 'unknown', partial: res.partial === true, applied: res.applied ?? 0, eligible: res.eligible ?? 0, reloaded: res.reloaded ?? 0 })
       return
     }
     let res
@@ -912,6 +1108,7 @@ function helperCode(presets, dir, typeSheets = {}) {
     fs: process.getBuiltinModule('fs'), dir: ${JSON.stringify(dir)},
     presets: Object.freeze(Object.assign(Object.create(null), ${JSON.stringify(presets)})),
     typeSheets: Object.freeze(Object.assign(Object.create(null), ${JSON.stringify(typeSheets)})),
+    lookOrder: Object.freeze(${JSON.stringify(LOOK_ORDER)}),
     uid: process.getuid(), pid: process.pid, boot: bootMs(), version: app.getVersion(), gen: ${HELPER_GEN},
     randomUUID: () => process.getBuiltinModule('crypto').randomUUID(), now: Date.now, app,
     digest: (s) => process.getBuiltinModule('crypto').createHash('sha256').update(s).digest('hex'),
@@ -1206,8 +1403,149 @@ const TYPE_PROBE = `(async () => {
           }
           stop() // a query that ran past the budget still marks the section incomplete
         }
+        // Activity (3 Nov 2026): which session marks each project box holds, so a later rule can tell "this project has
+        // a running session" apart. Numbers, booleans and fixed words only, per box in sidebar order: whether it is open,
+        // session rows (all and visible), each mark's paint and size, which status token its background or shadow names
+        // (from a fixed list, never the style text), whether it animates, anything drawn inside the header besides the
+        // name, controls outside rows and header, and how many boxes each candidate rule matches. Every cap is reported
+        // ('activity-sample' in truncated plus sampled counts); a query that fails or runs past the budget marks the
+        // section incomplete instead of looking empty; any error inside it is caught here and reported as a fixed word,
+        // so earlier results survive. These are observations: the tooltip labels give the true state of each mark.
+        const PROJ = 'div.isolate.rounded-lg'
+        const HDR = ':scope > div > div > .df-label-inset'
+        const NAME = 'span.inline-block.whitespace-nowrap'
+        const STATUS = ['fill-warning', 'fill-accent', 'text-muted', 'fill-danger', 'text-danger', 'fill-success', 'text-accent']
+        const CANDS = ['[data-cds=Pulse]', '.df-tail-mark [data-cds=Pulse]', '[data-cds=Pulse][style*=fill-warning]', '[data-cds=Pulse][style*=fill-accent]', '[data-cds=Pulse][style*=text-muted]']
+        let cutA = false
+        const stopA = () => { if (cutA || late()) { cutA = true; truncated.add('activity') } return cutA }
+        const qa = (root, sel) => { try { return root.querySelectorAll(sel) } catch { cutA = true; truncated.add('activity'); return null } }
+        const capped = () => truncated.add('activity-sample')
+        const bump = (o, k) => { o[k] = (o[k] || 0) + 1 }
+        // The status token named in one inline declaration, by property: only var(--cds-NAME followed by ')', ',' or a space.
+        const tokIn = (v) => { const hits = STATUS.filter(t => { const i = v.indexOf('var(--cds-' + t); if (i < 0) return false; const nx = v[i + 10 + t.length]; return nx === ')' || nx === ',' || nx === ' ' }); return hits.length === 1 ? hits[0] : hits.length === 0 ? 'other' : 'several' }
+        const decls = (s) => { const o = { bg: 'none', shadow: 'none' }; const ds = s.split(';'); if (ds.length > 30) { capped(); o.bg = o.shadow = 'unread' } for (const d of ds.slice(0, 30)) { const i = d.indexOf(':'); if (i < 0) continue; const k = d.slice(0, i).trim().toLowerCase(); const v = d.slice(i + 1); if (k === 'background' || k === 'background-color') o.bg = tokIn(v); else if (k === 'box-shadow') o.shadow = tokIn(v) } return o }
+        const shown = (e, c) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && c.display !== 'none' && c.visibility !== 'hidden' && c.opacity !== '0' }
+        const markOf = (p) => {
+          const c = getComputedStyle(p)
+          const d = decls(p.getAttribute('style') || '')
+          const filled = c.backgroundColor !== 'rgba(0, 0, 0, 0)' && c.backgroundColor !== 'transparent' && c.backgroundImage === 'none'
+          const ring = c.boxShadow !== 'none'
+          const r = p.getBoundingClientRect()
+          return { paint: filled && !ring ? 'fill' : ring && !filled ? 'ring' : filled ? 'both' : 'neither', bg: d.bg, shadow: d.shadow, shown: shown(p, c), w: Math.round(r.width), h: Math.round(r.height), anim: c.animationName !== 'none', animRunning: c.animationName !== 'none' && c.animationPlayState === 'running', opacity: num(c.opacity), inRow: !!p.closest('[data-row]'), inTail: !!p.closest('.df-tail-mark') }
+        }
+        // Every loop checks the budget on each step; every count below says how many items were actually looked at.
+        const activity = { reducedMotion: 'unknown', projects: null, boxes: [], candidates: {}, sidebarPulses: null, pulsesOutsideRows: null, pulsesLooked: 0, error: '' }
+        try {
+          activity.reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches
+          if (truncated.has('elements')) truncated.add('activity')
+          else if (!stopA()) {
+            const boxesAll = qa(side, PROJ)
+            if (boxesAll !== null && !stopA()) {
+              const projects = []
+              let looked = 0
+              for (let k = 0; k < boxesAll.length && k < 200; k++) { if (stopA()) break; looked++; if (boxesAll[k].querySelector(HDR)) projects.push(boxesAll[k]) }
+              if (boxesAll.length > 200) capped()
+              activity.boxesMatchingProj = boxesAll.length
+              activity.boxesLooked = looked
+              activity.projects = projects.length
+              if (projects.length > 60) capped()
+              for (const b of projects.slice(0, 60)) {
+                if (stopA()) break
+                const r = { error: '' }
+                activity.boxes.push(r)
+                try {
+                  const hdr = b.querySelector(HDR)
+                  if (stopA()) break
+                  const btn = hdr.querySelector('h3 button[aria-expanded]')
+                  r.expanded = btn ? pick(btn.getAttribute('aria-expanded'), ENUM) : 'none'
+                  if (stopA()) break
+                  r.current = !!b.querySelector('[aria-current=page]')
+                  if (stopA()) break
+                  const rows = qa(b, '[data-row]')
+                  if (rows === null || stopA()) break
+                  r.rows = rows.length
+                  r.rowsVisible = 0
+                  r.rowsLooked = 0
+                  for (let k = 0; k < rows.length && k < 300; k++) { if (stopA()) break; r.rowsLooked++; if (shown(rows[k], getComputedStyle(rows[k]))) r.rowsVisible++ }
+                  if (rows.length > 300) capped()
+                  if (stopA()) break
+                  const marks = qa(b, '[data-cds=Pulse]')
+                  if (marks === null || stopA()) break
+                  r.marks = marks.length
+                  r.marksLooked = 0
+                  r.bgTokens = {}
+                  r.shadowTokens = {}
+                  r.paints = {}
+                  r.detail = []
+                  for (let k = 0; k < marks.length && k < 40; k++) { if (stopA()) break; const m = markOf(marks[k]); r.marksLooked++; bump(r.bgTokens, m.bg); bump(r.shadowTokens, m.shadow); bump(r.paints, m.paint); if (r.detail.length < 12) r.detail.push(m) }
+                  if (marks.length > 40 || r.marksLooked > 12) capped()
+                  if (stopA()) break
+                  // Anything the header draws besides the name: marks, inline-painted elements, badges, digit-only text
+                  // outside the name span (a count badge would show here; a name made of digits does not).
+                  let digits = 0
+                  let textLooked = 0
+                  const tw = document.createTreeWalker(hdr, 4)
+                  for (let n = tw.nextNode(); n; n = tw.nextNode()) { if (stopA()) break; if (textLooked >= 50) { capped(); break } textLooked++; const t = n.textContent.trim(); if (t !== '' && only(t, DIG) && !(n.parentElement && n.parentElement.closest(NAME))) digits++ }
+                  if (stopA()) break
+                  const hs = qa(hdr, '*')
+                  if (hs === null || stopA()) break
+                  let painted = 0
+                  let hsLooked = 0
+                  for (let k = 0; k < hs.length && k < 80; k++) { if (stopA()) break; hsLooked++; const s = hs[k].getAttribute('style') || ''; if (s.includes('background') || s.includes('shadow')) painted++ }
+                  if (hs.length > 80) capped()
+                  if (stopA()) break
+                  const hm = qa(hdr, '[data-cds=Pulse]')
+                  if (hm === null || stopA()) break
+                  const hb = qa(hdr, '[data-cds=Badge]')
+                  if (hb === null || stopA()) break
+                  r.header = { marks: hm.length, badges: hb.length, painted, digitsOutsideName: digits, textLooked, elements: hs.length, elementsLooked: hsLooked, button: btn ? attrsOf(btn) : '' }
+                  // Controls in the box that are neither a session row nor the header ("show more", for example): counts only.
+                  const ctl = qa(b, 'button, [role=button], a')
+                  if (ctl === null || stopA()) break
+                  let extra = 0
+                  let extraShown = 0
+                  let ctlLooked = 0
+                  for (let k = 0; k < ctl.length && k < 200; k++) { if (stopA()) break; ctlLooked++; if (!ctl[k].closest('[data-row]') && !hdr.contains(ctl[k])) { extra++; if (shown(ctl[k], getComputedStyle(ctl[k]))) extraShown++ } }
+                  if (ctl.length > 200) capped()
+                  r.extraControls = extra
+                  r.extraControlsShown = extraShown
+                  r.controlsLooked = ctlLooked
+                } catch { r.error = 'box-failed'; truncated.add('activity') }
+              }
+              // Each candidate rule over the whole sidebar: how many boxes it matches; of those, how many have no project
+              // header at all (false hits), how many are projects past the 60 listed, and the listed projects by position.
+              for (const cs of CANDS) {
+                if (stopA()) break
+                const got = qa(side, PROJ + ':has(' + cs + ')')
+                if (got === null || stopA()) break
+                const c = { boxes: got.length, looked: 0, notProject: 0, projectBeyondList: 0, projectPositions: [] }
+                for (let k = 0; k < got.length && k < 200; k++) {
+                  if (stopA()) break
+                  c.looked++
+                  const i = projects.indexOf(got[k])
+                  if (i >= 0 && i < 60) { if (c.projectPositions.length < 60) c.projectPositions.push(i + 1) }
+                  else if (got[k].querySelector(HDR)) c.projectBeyondList++
+                  else c.notProject++
+                }
+                if (got.length > 200) capped()
+                activity.candidates[cs] = c
+              }
+              if (!stopA()) {
+                const sp = qa(side, '[data-cds=Pulse]')
+                if (sp !== null && !stopA()) {
+                  activity.sidebarPulses = sp.length
+                  let o = 0
+                  for (let k = 0; k < sp.length && k < 400; k++) { if (stopA()) break; activity.pulsesLooked++; if (!sp[k].closest('[data-row]')) o++ }
+                  if (sp.length > 400) capped()
+                  activity.pulsesOutsideRows = o
+                }
+                stopA()
+              }
+            }
+          }
+        } catch { activity.error = 'section-failed'; truncated.add('activity') }
         return {
-          code: 'ok', ms: Math.round(performance.now() - t0), truncated: [...truncated], visited, dataRows: rowsSeen.size, expanded, otherDfTokens: dfOther.size, selection,
+          code: 'ok', ms: Math.round(performance.now() - t0), truncated: [...truncated], visited, dataRows: rowsSeen.size, expanded, otherDfTokens: dfOther.size, selection, activity,
           route: pick(route, ['code', 'chat', 'new', 'project', 'projects', 'settings', 'recents', '']),
           skinMarker: getComputedStyle(document.documentElement).getPropertyValue('--reskin-active').trim() === '1',
           html: attrsOf(document.documentElement), sidebar: desc(side), sidebarBox: box(side),
@@ -1859,28 +2197,131 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 // each selector one of TYPE_RULES exactly (found by the live probe; never icons, code or warnings), and on each only the
 // declarations listed for it: font-size (whole px, 11 to 16), font-weight (400, 500, 600 or 700), the sidebar row text
 // size token --df-row-font (whole px, 11 to 16, on the sidebar only; session names, and some top controls and footer
-// text), and colour only as one of the skin's own text tokens (accent or primary): the one deliberate exception to "colours only through
-// checkCss", since it can only point at a colour the skin or Claude already sets, never bring one of its own. Optionally !important. No other var(), calc(), brackets or relative units.
+// text), on the current project's header row only one exact accent stripe (box-shadow, see TYPE_STRIPE), and colour
+// only as one of the skin's own text tokens (accent or primary): the one deliberate exception to "colours only through
+// checkCss", since it can only point at a colour the skin or Claude already sets, never bring one of its own. Optionally
+// !important. No other var(), calc(), brackets or relative units.
 const TYPE_HEADER = '.dframe-sidebar .df-label-inset h3 span.inline-block.whitespace-nowrap'
 // The same header text, but only while its project is open (Claude marks the header button aria-expanded=true).
 const TYPE_HEADER_OPEN = '.dframe-sidebar .df-label-inset h3 button[aria-expanded=true] span.inline-block.whitespace-nowrap'
 // The header of the project that holds the open chat: Claude marks that chat's row button aria-current=page, and each
 // project sits in its own isolate rounded-lg box with its header two levels down (live probe, 2 Nov 2026).
 const TYPE_HEADER_CURRENT = '.dframe-sidebar div.isolate.rounded-lg:has([aria-current=page]) > div > div > .df-label-inset h3 span.inline-block.whitespace-nowrap'
+// The header of an active project: one holding any session status mark (running, waiting for you or unread). Claude keeps
+// a folded project's session rows in the page, hidden, with their marks, so this holds folded or not (live activity probe,
+// 3 Nov 2026). It names the mark only, never its inline colour text. Same specificity as TYPE_HEADER_CURRENT; today both
+// set the same colour and weight, so the order matters only if they ever differ.
+const TYPE_HEADER_ACTIVE = '.dframe-sidebar div.isolate.rounded-lg:has([data-cds=Pulse]) > div > div > .df-label-inset h3 span.inline-block.whitespace-nowrap'
+// The header ROW of the project holding the open chat, for the "you are here" stripe (3 Nov 2026). Marks on the name
+// were clipped (dotted underline) or too quiet (italic): the name sits in a span with overflow hidden, but this 32px row
+// does not clip (live probe chain). Only box-shadow, and only the one value TYPE_STRIPE: an inset 3px bar in the skin
+// accent at the row's left edge. Inset, so it stays inside the row and needs no room at the scroll list's edge.
+const TYPE_ROW_CURRENT = '.dframe-sidebar div.isolate.rounded-lg:has([aria-current=page]) > div > div > .df-label-inset'
+const TYPE_STRIPE = 'inset 3px 0 0 0 var(--cds-text-accent)'
 export const TYPE_RULES = new Map([
   ['.dframe-sidebar', new Set(['--df-row-font'])],
   [TYPE_HEADER, new Set(['font-size', 'font-weight', 'color'])],
   [TYPE_HEADER_OPEN, new Set(['color'])],
-  [TYPE_HEADER_CURRENT, new Set(['color'])],
+  [TYPE_HEADER_ACTIVE, new Set(['color', 'font-weight'])],
+  [TYPE_HEADER_CURRENT, new Set(['color', 'font-weight'])],
+  [TYPE_ROW_CURRENT, new Set(['box-shadow'])],
 ])
 export const TYPE_SELECTORS = new Set(TYPE_RULES.keys())
+// Fonts (3 Nov 2026, master tool only until release.json says "font": true): one rule on the page root and Claude's own
+// font roots (.cds-root, where Claude's font menu sets its token) points five of Claude's font tokens at one stack from
+// FONT_STACKS (skin-lib.mjs). Names only from there, none needing quotes. Live probes 2 Nov: body, replies, message box, buttons and
+// sidebar read these tokens; code, icons and the serif display headings read others and stay Claude's.
+export const FONT_SELECTOR = ':root, .cds-root'
+export const FONT_PROPS = Object.freeze(['--cds-font-sans', '--font-sans', '--default-font-family', '--font-claude-response', '--font-user-message'])
+const FONT_VALUES = new Set(Object.values(FONT_STACKS))
+const fontValue = (v) => v.replace(/\s*,\s*/g, ', ').replace(/\s+/g, ' ').trim()
+// The font part of a type sheet, exactly as the checker expects it.
+// A sized key (`plex-16`) adds the size rules (names probe 7, 3 Nov 2026): reply text inherits its size from Claude's
+// markdown block .prose, whose own rule reads a value Claude writes inline under an unstable name, so the block itself
+// gets the size (important beats Claude's normal rule; .prose is Claude's rendered markdown wherever it appears). The
+// message box reads --cmp-font-size (through Claude's text-entry floor) and --cmp-leading; code, kbd and some other
+// chat text read --chat-body and --chat-leading (Claude's Transcript switch). Those four tokens on every element,
+// important. Sidebar, buttons and menus read other tokens and keep Claude's sizes.
+export const SIZE_SELECTOR = '*'
+export const SIZE_PROPS = Object.freeze(['--chat-body', '--chat-leading', '--cmp-font-size', '--cmp-leading'])
+const SIZE_IS_LEADING = new Set(['--chat-leading', '--cmp-leading', 'line-height'])
+export const PROSE_SELECTOR = '.prose'
+export const PROSE_PROPS = Object.freeze(['font-size', 'line-height'])
+export const sizeCss = (size) => `${SIZE_SELECTOR} { --chat-body: ${size}px !important; --chat-leading: ${SIZE_LEADING[size]}px !important; --cmp-font-size: ${size}px !important; --cmp-leading: ${SIZE_LEADING[size]}px !important; }\n${PROSE_SELECTOR} { font-size: ${size}px !important; line-height: ${SIZE_LEADING[size]}px !important; }\n`
+// A today's font key (`plex`, `plex-16`) -> its sheet: exactly the look parts it means, joined (unchanged text).
+export function fontCss(key) {
+  if (splitFontKey(key) === null) throw new Error(`Not a Reskin font: ${String(key).slice(0, 40)}`)
+  return parseLook(key).map(lookPartCss).join('')
+}
+// Font picker parts (4 Nov 2026): each section's font, size and weight as one small rule set on
+// its own exact selectors (scopes probes 8 and 9). A section font sets the five font tokens AND font-family on the scope
+// root (Claude redeclares the tokens on .cds-root levels, and a family resolved above is inherited as a value). Header
+// parts and the rows size use different spellings of the type sheet's selectors (class order swapped; aside.), so they
+// never collide with the type sheet's own rules in the checker; the swapped header selectors keep the type sheet's
+// specificity and come later, so they win; aside.dframe-sidebar is more specific than the type sheet's .dframe-sidebar.
+export const LOOK_SEL = Object.freeze({
+  chatFont: '.prose, .prose :is(h1, h2, h3, h4, h5, h6), .ProseMirror[contenteditable=true]',
+  chatWeight: '.prose, .ProseMirror[contenteditable=true]',
+  rows: '.dframe-sidebar [data-row]',
+  rowsSize: 'aside.dframe-sidebar',
+  rowsWeight: '.dframe-sidebar [data-row] button, .dframe-sidebar button[data-row]',
+  header: '.dframe-sidebar .df-label-inset h3 span.whitespace-nowrap.inline-block',
+  headerActive: '.dframe-sidebar div.isolate.rounded-lg:has([data-cds=Pulse]) > div > div > .df-label-inset h3 span.whitespace-nowrap.inline-block',
+  headerCurrent: '.dframe-sidebar div.isolate.rounded-lg:has([aria-current=page]) > div > div > .df-label-inset h3 span.whitespace-nowrap.inline-block',
+})
+const fontBlock = (sel, name, family) => `${sel} {\n${FONT_PROPS.map((p) => `  ${p}: ${FONT_STACKS[name]} !important;`).join('\n')}${family ? `\n  font-family: ${FONT_STACKS[name]} !important;` : ''}\n}\n`
+// One part id -> its exact CSS. Throws on anything that is not a part.
+export function lookPartCss(id) {
+  if (!LOOK_PARTS.includes(id)) throw new Error(`Not a look part: ${String(id).slice(0, 40)}`)
+  const [sec, kind, v] = id.split('.')
+  if (sec === 'ui') return fontBlock(FONT_SELECTOR, v, false)
+  if (sec === 'chat') return kind === 'font' ? fontBlock(LOOK_SEL.chatFont, v, true) : kind === 'size' ? sizeCss(Number(v)) : `${LOOK_SEL.chatWeight} { font-weight: ${v} !important; }\n`
+  if (sec === 'rows') return kind === 'font' ? fontBlock(LOOK_SEL.rows, v, true) : kind === 'size' ? `${LOOK_SEL.rowsSize} { --df-row-font: ${v}px !important; }\n` : `${LOOK_SEL.rowsWeight} { font-weight: ${v} !important; }\n`
+  // headers: at 500 or more the active and current headers take the chosen weight too (owner decision, 4 Nov 2026); under 500
+  // the type sheet's emphasis (500) stays.
+  if (kind === 'font') return fontBlock(LOOK_SEL.header, v, true)
+  if (kind === 'size') return `${LOOK_SEL.header} { font-size: ${v}px !important; }\n`
+  return `${Number(v) >= 500 ? `${LOOK_SEL.header}, ${LOOK_SEL.headerActive}, ${LOOK_SEL.headerCurrent}` : LOOK_SEL.header} { font-weight: ${v} !important; }\n`
+}
+// The type slot's whole sheet: the header sheet (type on) and then the parts in LOOK_ORDER. The helper composes exactly
+// the same way (installHelper's compose; a test asserts equal text).
+export function composeType(parts, headers, ids) {
+  return (headers ? parts.headers + (ids.length ? '\n' : '') : '') + ids.map((id) => parts[id]).join('')
+}
+// Every part rule (not ui.font, not the chat size pair, which have their own checks): normalized "selector{body}" -> slot.
+const normRule = (sel, body) => `${sel.trim().replace(/\s+/g, ' ')}{${body.split(';').map((d) => d.trim().replace(/\s+/g, ' ')).filter(Boolean).join(';')}}`
+let PART_RULES = null
+const partRules = () => {
+  if (PART_RULES !== null) return PART_RULES
+  const m = new Map()
+  for (const id of LOOK_PARTS) {
+    if (id.startsWith('ui.font.') || id.startsWith('chat.size.')) continue
+    const css = lookPartCss(id)
+    const open = css.indexOf('{'), close = css.lastIndexOf('}')
+    if (open === -1 || css.indexOf('}') !== close) throw new Error(`A part must be one rule: ${id}`)
+    m.set(normRule(css.slice(0, open), css.slice(open + 1, close)), slotOf(id))
+  }
+  return (PART_RULES = m)
+}
+// Is the font feature in this copy? The development copy (no release.json) has it; a release only with "font": true.
+export function fontShipped(dir = here) {
+  const f = path.join(dir, 'release.json')
+  try { lstatSync(f) } catch (e) { return e.code === 'ENOENT' }
+  try { return JSON.parse(readFileSync(f, 'utf8'))?.font === true } catch { return false }
+}
 const TYPE_ACCENT = 'var(--cds-text-accent)'
 // Colour only as one of the skin's own text tokens (Claude's own with no skin): never a colour of the sheet's own.
 const TYPE_COLOURS = new Set([TYPE_ACCENT, 'var(--cds-text-primary)'])
-// The only bracketed text a type sheet may hold: those tokens, the attribute in TYPE_HEADER_OPEN and the :has() in TYPE_HEADER_CURRENT.
-const TYPE_BRACKETED = [...TYPE_COLOURS, '[aria-expanded=true]', ':has([aria-current=page])']
-const TYPE_MAX = 2048
-export function checkTypeCss(raw) {
+// The only bracketed text a type sheet may hold: those tokens, the attribute in TYPE_HEADER_OPEN and the :has() in
+// TYPE_HEADER_CURRENT and TYPE_HEADER_ACTIVE.
+// Font picker parts add exactly three (4 Nov 2026): the reply headings, the editable message box and the session row mark.
+const TYPE_BRACKETED = [...TYPE_COLOURS, '[aria-expanded=true]', ':has([aria-current=page])', ':has([data-cds=Pulse])', ':is(h1, h2, h3, h4, h5, h6)', '[contenteditable=true]', '[data-row]']
+// The largest sheet the slot can hold: the header sheet with the longest part of every slot (measured by a test, which
+// fails if this is too small or more than 512 bytes larger than needed).
+export const TYPE_MAX = 4608
+// `font` false: the sheet may not hold the font rule (the header sheet file); `headers` false: it may hold nothing else (a
+// font sheet). A combined sheet allows both.
+export function checkTypeCss(raw, { font = true, headers = true } = {}) {
   if (typeof raw !== 'string') throw new Error('The type sheet is not text.')
   if (/[^\x20-\x7e\t\n\r\f]/.test(raw)) throw new Error('The type sheet may contain only plain ASCII characters, spaces, tabs and line breaks.')
   if (/["'\\]/.test(raw)) throw new Error('The type sheet may not contain quotes or backslashes.')
@@ -1904,9 +2345,17 @@ export function checkTypeCss(raw) {
   css = css.trim()
   if (css.includes('*/')) throw new Error('The type sheet has a stray comment end.')
   if (/url|@|image-set|image\s*\(|src\s*\(|\/\/|expression\s*\(/i.test(css)) throw new Error('The type sheet may not load anything or use @-rules.')
-  // The accent token is the one bracketed value allowed; any other bracket or parenthesis is refused.
+  // Only the entries in TYPE_BRACKETED may hold brackets or parentheses; any other is refused.
   if (/[()\[\]]/.test(TYPE_BRACKETED.reduce((t, b) => t.split(b).join(' '), css))) throw new Error('The type sheet may not use brackets or parentheses (no var() but the skin text tokens, no calc(), no attribute selectors but the open-project one).')
-  let rules = 0, at = 0
+  let rules = 0, at = 0, fontRules = 0, sizeRules = 0, proseRules = 0
+  const sizeRows = []
+  // Look parts: each slot at most once, slots in LOOK_ORDER, all after the header sheet's own rules (the composition order).
+  let slotAt = -1, proseFirst = false
+  const slotSeen = (slot) => {
+    const k = LOOK_ORDER.indexOf(slot)
+    if (k <= slotAt) throw new Error(`The ${slot} part is out of order or given twice.`)
+    slotAt = k
+  }
   while (at < css.length) {
     const open = css.indexOf('{', at)
     if (open === -1) throw new Error('Nothing may follow the last rule.')
@@ -1916,11 +2365,87 @@ export function checkTypeCss(raw) {
     if (sel.includes('}')) throw new Error('The type sheet has a stray closing brace.')
     const body = css.slice(open + 1, close)
     if (body.includes('{')) throw new Error('Rules may not be nested.')
+    if (sel === FONT_SELECTOR) {
+      // The font rule: once per sheet, exactly the five font tokens, each once, all set to the same stack from FONT_STACKS.
+      if (!font) throw new Error('This sheet may not hold a font rule.')
+      if (++fontRules > 1) throw new Error('A type sheet may hold one font rule only.')
+      const decls = body.split(';').map((d) => d.trim()).filter(Boolean)
+      const seen = new Set()
+      let stack = null
+      for (const d of decls) {
+        const m = /^(--[a-z-]+)\s*:\s*([A-Za-z][A-Za-z0-9 ,-]*?)\s*(!\s*important)?$/.exec(d)
+        if (m === null) throw new Error(`Not a font declaration I understand: ${d.slice(0, 60)}`)
+        const [, name, raw] = m
+        if (!FONT_PROPS.includes(name)) throw new Error(`${name.slice(0, 40)} may not be set on ${FONT_SELECTOR}.`)
+        if (seen.has(name)) throw new Error(`${name} is set twice in the font rule.`)
+        seen.add(name)
+        const v = fontValue(raw)
+        if (!FONT_VALUES.has(v)) throw new Error(`Not one of the reviewed font stacks: ${v.slice(0, 60)}`)
+        if (stack !== null && v !== stack) throw new Error('The font rule must set every token to the same font.')
+        stack = v
+      }
+      if (seen.size !== FONT_PROPS.length) throw new Error(`The font rule must set all of ${FONT_PROPS.join(', ')}.`)
+      slotSeen('ui.font')
+      rules++
+      at = close + 1
+      while (at < css.length && /\s/.test(css[at])) at++
+      continue
+    }
+    if (sel === SIZE_SELECTOR || sel === PROSE_SELECTOR) {
+      // The size rules: each once, only beside a font rule, exactly their own properties, each once and important, whole
+      // px; sizes equal, line heights equal, and the pair one FONT_SIZES row (12px with 18px .. 16px with 22px). The
+      // two rules must come together and agree (checked after the last rule).
+      if (!font) throw new Error('This sheet may not hold a size rule.')
+      const prose = sel === PROSE_SELECTOR
+      if (prose ? ++proseRules > 1 : ++sizeRules > 1) throw new Error(`A type sheet may hold one ${prose ? '.prose' : '*'} size rule only.`)
+      const props = prose ? PROSE_PROPS : SIZE_PROPS
+      const got = {}
+      for (const d of body.split(';').map((x) => x.trim()).filter(Boolean)) {
+        const m = /^(--[a-z-]+|[a-z-]+)\s*:\s*([1-9][0-9])px\s*!\s*important$/.exec(d)
+        if (m === null) throw new Error(`Not a size declaration I understand (a whole px number, important): ${d.slice(0, 60)}`)
+        if (!props.includes(m[1])) throw new Error(`${m[1].slice(0, 40)} may not be set on ${sel}.`)
+        if (Object.hasOwn(got, m[1])) throw new Error(`${m[1]} is set twice in the size rule.`)
+        got[m[1]] = Number(m[2])
+      }
+      if (Object.keys(got).length !== props.length) throw new Error(`The ${sel} size rule must set ${props.join(', ')}.`)
+      const sizes = new Set(props.filter((p) => !SIZE_IS_LEADING.has(p)).map((p) => got[p]))
+      const leads = new Set(props.filter((p) => SIZE_IS_LEADING.has(p)).map((p) => got[p]))
+      const [size] = sizes, [lead] = leads
+      if (sizes.size !== 1 || leads.size !== 1 || !FONT_SIZES.includes(size) || SIZE_LEADING[size] !== lead) throw new Error(`Not one of the reviewed sizes: ${[...sizes].join('/')}px with ${[...leads].join('/')}px lines.`)
+      // The * rule opens the chat.size slot; the .prose rule must follow it at once (checked by the pair count and order).
+      if (!prose) slotSeen('chat.size')
+      else if (sizeRules === 0) proseFirst = true
+      else if (LOOK_ORDER[slotAt] !== 'chat.size') throw new Error('The .prose size rule must follow the * size rule.')
+      sizeRows.push(size)
+      rules++
+      at = close + 1
+      while (at < css.length && /\s/.test(css[at])) at++
+      continue
+    }
+    const part = partRules().get(normRule(sel, body))
+    if (part !== undefined) {
+      // A look part: exactly one of the reviewed part rules, text for text.
+      if (!font) throw new Error('This sheet may not hold a font, size or weight part.')
+      slotSeen(part)
+      rules++
+      at = close + 1
+      while (at < css.length && /\s/.test(css[at])) at++
+      continue
+    }
+    if (!headers) throw new Error('A font sheet may hold the font and size rules only.')
     const allowed = TYPE_RULES.get(sel)
     if (allowed === undefined) throw new Error(`Not one of the allowed type selectors (one per rule): ${sel.slice(0, 80)}`)
+    if (slotAt !== -1) throw new Error('The header sheet\'s rules come before every font, size or weight part.')
     const decls = body.split(';').map((d) => d.trim()).filter(Boolean)
     if (decls.length === 0) throw new Error('A rule sets nothing.')
     for (const d of decls) {
+      // The stripe: box-shadow with exactly TYPE_STRIPE (single spaces), nothing of shadow syntax beyond it.
+      const shadow = /^box-shadow\s*:\s*(.*?)\s*(!\s*important)?$/.exec(d)
+      if (shadow !== null) {
+        if (!allowed.has('box-shadow')) throw new Error(`box-shadow may not be set on ${sel.slice(0, 60)}.`)
+        if (shadow[1] !== TYPE_STRIPE) throw new Error(`box-shadow must be exactly ${TYPE_STRIPE}, not: ${shadow[1].slice(0, 60)}`)
+        continue
+      }
       const m = /^(--df-row-font|[a-z-]+)\s*:\s*([0-9a-z]+|var\(--cds-text-(?:accent|primary)\))\s*(!\s*important)?$/.exec(d)
       if (m === null) throw new Error(`Not a declaration I understand: ${d.slice(0, 60)}`)
       const [, name, value] = m
@@ -1928,26 +2453,50 @@ export function checkTypeCss(raw) {
       const px = () => { const v = /^(\d{2})px$/.exec(value); if (!v || Number(v[1]) < 11 || Number(v[1]) > 16) throw new Error(`${name} must be a whole px size from 11px to 16px, not: ${value}`) }
       if (name === 'font-size' || name === '--df-row-font') px()
       else if (name === 'font-weight') { if (!/^(400|500|600|700)$/.test(value)) throw new Error(`font-weight must be 400, 500, 600 or 700, not: ${value}`) }
-      else if (name === 'color') { if (!TYPE_COLOURS.has(value)) throw new Error(`color may only be one of the skin text tokens (${[...TYPE_COLOURS].join(', ')}), not: ${value}`) }
+      else if (name === 'color') { if (!TYPE_COLOURS.has(value)) throw new Error(`${name} may only be one of the skin text tokens (${[...TYPE_COLOURS].join(', ')}), not: ${value}`) }
     }
     rules++
     at = close + 1
     while (at < css.length && /\s/.test(css[at])) at++
   }
   if (rules === 0) throw new Error('The type sheet is empty.')
+  // A chat size no longer needs a font (font picker, 4 Nov 2026): Claude's font at a Reskin size.
+  if (sizeRules !== proseRules) throw new Error('The * and .prose size rules go together.')
+  if (proseFirst) throw new Error('The .prose size rule must follow the * size rule.')
+  if (sizeRows.length === 2 && sizeRows[0] !== sizeRows[1]) throw new Error('The two size rules must set the same size.')
   return rules
 }
 
-// The reviewed type sheets for the helper, each passing checkTypeCss (fixed at injection). Today one: 'on'.
-export function helperTypeSheets(dir = path.join(here, 'type')) {
-  return typeSheetsWhy(dir).sheets
+// The reviewed type slot texts for the helper (fixed at injection): 'headers' (the sidebar header sheet, checked) and,
+// where fonts ship, every look part (font picker, 4 Nov 2026), keyed by part id. The helper composes a sheet from these
+// (composeType) and inserts nothing else.
+export function helperTypeSheets(dir = path.join(here, 'type'), opts) {
+  return typeSheetsWhy(dir, opts).sheets
 }
-// The same, with the reason when nothing is offered (missing, unreadable or refused by checkTypeCss), for the tick report.
-export function typeSheetsWhy(dir = path.join(here, 'type')) {
-  let css
-  try { css = readFileSync(path.join(dir, 'sidebar-headers.css'), 'utf8') } catch (e) { return { sheets: {}, why: e.code === 'ENOENT' ? 'no type sheet in this copy' : 'the type sheet could not be read' } }
-  try { checkTypeCss(css) } catch (e) { return { sheets: {}, why: 'the type sheet did not pass its check: ' + String(e.message).slice(0, 120) } }
-  return { sheets: { on: css }, why: null }
+// The same, with the reason when the header sheet is not offered (missing, unreadable or refused by checkTypeCss), for
+// the tick report. Parts come only where fontShipped() says so. Every part must pass alone, after the header sheet, and
+// in the largest composition (the header sheet with the longest part of every slot), or no part is offered at all
+// (never a silent gap).
+export function typeSheetsWhy(dir = path.join(here, 'type'), { fonts = fontShipped() } = {}) {
+  const sheets = {}
+  let headers = null, why = null, fontWhy = null
+  try { headers = readFileSync(path.join(dir, 'sidebar-headers.css'), 'utf8') } catch (e) { why = e.code === 'ENOENT' ? 'no type sheet in this copy' : 'the type sheet could not be read' }
+  if (headers !== null) { try { checkTypeCss(headers, { font: false }); sheets.headers = headers } catch (e) { headers = null; why = 'the type sheet did not pass its check: ' + String(e.message).slice(0, 120) } }
+  if (fonts) {
+    const got = {}
+    try {
+      for (const id of LOOK_PARTS) {
+        const css = lookPartCss(id)
+        checkTypeCss(css, { headers: false })
+        if (headers !== null) checkTypeCss(headers + '\n' + css)
+        got[id] = css
+      }
+      const longest = LOOK_ORDER.map((slot) => LOOK_PARTS.filter((id) => slotOf(id) === slot).reduce((a, b) => (got[b].length > got[a].length ? b : a)))
+      checkTypeCss(composeType({ ...got, headers: headers ?? '' }, headers !== null, longest))
+      Object.assign(sheets, got)
+    } catch (e) { fontWhy = 'a font part did not pass its check, so no fonts are offered: ' + String(e.message).slice(0, 120) }
+  }
+  return { sheets, why, fontWhy }
 }
 
 // Every reviewed preset, each passing checkCss, for the helper (fixed at injection; release 1 has no custom colours).
@@ -2140,8 +2689,8 @@ async function main() {
   if (dots && mode !== 'batch') { console.log('--dot-census works with batch only.'); return 2 }
   if (waitOpen && !['apply', 'remove', 'type-probe'].includes(mode)) { console.log('--wait-open works with apply, remove or type-probe only.'); return 2 }
   if (quick && !(waitOpen && withHelper)) { console.log('--quick needs apply with the colour helper and --wait-open.'); return 2 }
-  if (!['probe', 'type-probe', 'menu-probe', 'state', 'selftest', 'reset', 'apply', 'remove', 'close', 'check-css', 'verify', 'batch', 'batch-check'].includes(mode ?? '')) {
-    console.log('Usage: node skin.mjs probe | type-probe [--wait-open] | menu-probe | state | selftest | reset | apply <file.css> [--no-helper] | remove | close | check-css <file.css> | verify | batch previous|off <preset.css>... | batch-check previous|off <preset.css>...')
+  if (!['probe', 'type-probe', 'menu-probe', 'state', 'selftest', 'reset', 'apply', 'remove', 'close', 'check-css', 'slot-offers', 'verify', 'batch', 'batch-check'].includes(mode ?? '')) {
+    console.log('Usage: node skin.mjs probe | type-probe [--wait-open] | menu-probe | state | selftest | reset | apply <file.css> [--no-helper] | remove | close | check-css <file.css> | slot-offers | verify | batch previous|off <preset.css>... | batch-check previous|off <preset.css>...')
     return 2
   }
   // The public release (release.json beside this file, not saying "oneClick": true) runs only what the tick path needs;
@@ -2162,6 +2711,14 @@ async function main() {
   if (mode === 'verify') {
     checkSignature()
     console.log('Claude signature OK')
+    return 0
+  }
+  // Offline: which type sheets a new helper would be given (the same checked map a tick hands it), as one JSON line, so a
+  // combined tick line can refuse a part this copy cannot do before the prompt. Never touches Claude or any port.
+  if (mode === 'slot-offers') {
+    const offer = typeSheetsWhy()
+    const keys = Object.keys(offer.sheets)
+    console.log(JSON.stringify({ headers: keys.includes('headers'), parts: keys.filter((k) => k !== 'headers'), fontWhy: offer.fontWhy }))
     return 0
   }
   // Offline check for tests and CI: validates a stylesheet and never touches Claude or any port.
@@ -2348,6 +2905,7 @@ async function main() {
     else console.log(`SAMPLES: ${JSON.stringify({ mode: claudeMode, version: claudeVersion, samples: result.samples ?? [] })}`)
     if (withHelper) console.log(helper?.helper === 'active' ? `HELPER: active ${helper.session}` : `HELPER: none ${helper?.why ?? 'the apply did not fully succeed'}`)
     if (withHelper && helper?.helper === 'active') console.log(typeOffer.why === null ? 'type switch: available (/skin type on)' : `type switch: not available (${typeOffer.why})`)
+    if (withHelper && helper?.helper === 'active' && typeOffer.fontWhy) console.log(`fonts: not available (${typeOffer.fontWhy})`)
     if (presets?.skipped.length) console.log(`NOTE: presets left out of the helper (failed the check): ${presets.skipped.join(', ')}`)
   }
   if (failure !== null) {
@@ -2372,7 +2930,7 @@ main()
   .then(code => process.exit(code))
   .catch(err => {
     console.log(`Stopped: ${err.message}`)
-    if (['check-css', 'verify', 'batch-check'].includes(process.argv[2])) process.exit(1) // offline modes: never touch or inspect the port
+    if (['check-css', 'slot-offers', 'verify', 'batch-check'].includes(process.argv[2])) process.exit(1) // offline modes: never touch or inspect the port
     try {
       if (listener() !== 'none') console.log(`Port ${PORT} is open: untick Developer > Enable Main Process Debugger in Claude.`)
     } catch {

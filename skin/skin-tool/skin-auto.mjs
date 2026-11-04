@@ -39,6 +39,8 @@ import {
   closeMessageThenApply, dialogReadScript, parseDialogRead, provesNoDialog, NO_CHROME_GUARD_FIRST_S, NO_CHROME_TIMES,
   CLAUDE_BINARY, TICK, LOCK_PORT, checksLine, helperActiveLine, judgeHealth, healthReport, expectedColours, judgeChecks, liveSession, parsePs, privateDir, readPrefs, sendSwitch,
   stateDirOf, writePrivateJson, writePrivateText, readPrivateJson, debuggerClosedLine, tcpProbe, TYPE_WHAT, typeLine,
+  FONT_STACKS, FONT_LINKS, FONT_SIZES, fontFamily, fontName, fontKey, fontKeyOf, fontBase, splitFontKey, SIZE_MENU_LINE, FONT_INSTALLED_JXA, fontInstalled, FONT_MENU_LINE, fontLines, parseSetLine, runSetParts, restoreParts, slotPairOk, slotFailLine,
+  SECTIONS, FONT_WEIGHTS, parseLook, lookKey, lookSetWants, lookOffered, lookFonts, fontLabel, describeLook, mergeSection,
 } from './skin-lib.mjs'
 import { loggingOn, startRunLog } from './skin-log.mjs'
 
@@ -77,9 +79,12 @@ if (!nodeOk(process.versions.node)) {
   finish('refused', EXIT.refused)
 }
 
+// The run's own start: the deadline below counts from here, so the checks before the prompt (stylesheet, slot-offers,
+// installed font) use up the same allowance the /skin mod counts from launching this process.
+const RUN_START = Date.now()
 const argv0 = process.argv.slice(2)
 // The first word may name the way to run: tick ("I tick it"), one-click (the run ticks), switch, status.
-const verb = ['tick', 'one-click', 'switch', 'status', 'check', 'type'].includes(argv0[0]) ? argv0[0] : null
+const verb = ['tick', 'one-click', 'switch', 'status', 'check', 'type', 'font', 'set', 'look'].includes(argv0[0]) ? argv0[0] : null
 const tickMode = verb === 'tick'
 const args = verb ? argv0.slice(1) : argv0
 const PRESET_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
@@ -99,7 +104,15 @@ const oneClickShipped = (() => {
   try { return JSON.parse(readFileSync(f, 'utf8'))?.oneClick === true } catch { return false }
 })()
 // Every run that is not tick, switch, status, check or --check would tick the menu itself (one-click, batch, no verb).
-if (!oneClickShipped && !tickMode && !['switch', 'status', 'check', 'type'].includes(verb) && !checkOnly) {
+// Fonts (3 Nov 2026): in the development copy only, until release.json says "font": true. Off also means no font
+// sheets for the helper (skin.mjs reads the same file) and no font restored after a tick; the saved font is kept.
+const fontShipped = (() => {
+  const f = path.join(here, 'release.json')
+  try { nodeFs.lstatSync(f) } catch (e) { return e.code === 'ENOENT' }
+  try { return JSON.parse(readFileSync(f, 'utf8'))?.font === true } catch { return false }
+})()
+if ((verb === 'font' || verb === 'look') && !fontShipped) usage('Fonts are not in this release.')
+if (!oneClickShipped && !tickMode && !['switch', 'status', 'check', 'type', 'font', 'set', 'look'].includes(verb) && !checkOnly) {
   usage('one-click is not in this release. Use: node skin-auto.mjs tick <preset> (or /skin <name> in Claude), then switch.')
 }
 const isBatch = args[0] === 'batch'
@@ -142,15 +155,40 @@ const batchArgs = () => {
   return ['batch', final, ...files, ...(dots ? ['--dot-census'] : [])]
 }
 const arg = isBatch ? 'batch' : args.find((a) => !a.startsWith('--'))
-if (!arg && !checkOnly && verb !== 'status' && verb !== 'check') usage(oneClickShipped ? 'Usage: node skin-auto.mjs [tick|one-click] <preset|stylesheet.css> | switch <preset|off|remove> | status | check | menu-probe | remove | reset | state | selftest | probe | batch a,b,c [--final previous|off] | --check  [--dry-run]'
-  : 'Usage: node skin-auto.mjs tick <preset|remove> | switch <preset|off|remove> | type <on|off> | status | check')
+const SET_LINE = `set [<preset>|off]${fontShipped ? ' [font <name>|off]' : ''} [type on|off]`
+if (!arg && !checkOnly && verb !== 'status' && verb !== 'check') usage(oneClickShipped ? `Usage: node skin-auto.mjs [tick|one-click] <preset|stylesheet.css> | switch <preset|off|remove> | ${SET_LINE} | status | check | menu-probe | remove | reset | state | selftest | probe | batch a,b,c [--final previous|off] | --check  [--dry-run]`
+  : `Usage: node skin-auto.mjs tick <preset|remove> | switch <preset|off|remove> | type <on|off>${fontShipped ? ' | font <name|off|list>' : ''} | ${SET_LINE} | status | check`)
+// The one-line command's font and type parts on a tick (3 Nov 2026): `tick <preset> --want-font=<name|off>
+// --want-type=on|off`. They replace the remembered headers and font in the restore step; a part not given keeps the
+// remembered one. Checked here for shape; what this copy offers and whether the font is installed are checked before the
+// prompt (below), so nothing is ticked for a line that cannot be done.
+const wantOf = (k) => {
+  const a = args.filter((x) => x.startsWith(`--want-${k}=`))
+  if (a.length > 1) usage(`--want-${k} is given twice.`)
+  return a.length === 1 ? a[0].slice(`--want-${k}=`.length) : undefined
+}
+const wants = { font: wantOf('font'), type: wantOf('type') }
+if (args.some((x) => x.startsWith('--want-') && !/^--want-(?:font|type)=/.test(x))) usage('Only --want-font=<name|name-size|off> and --want-type=on|off are understood.')
+const hasWants = wants.font !== undefined || wants.type !== undefined
+if (hasWants) {
+  if (!tickMode) usage('Font and type parts go with a tick only (tick <preset> --want-font=<name|off> --want-type=on|off).')
+  if (wants.type !== undefined && wants.type !== 'on' && wants.type !== 'off') usage('--want-type takes on or off.')
+  if (wants.font !== undefined) {
+    if (!fontShipped) usage('Fonts are not in this release.')
+    if (wants.font !== 'off') {
+      const k = fontKeyOf(wants.font)
+      if (k.why) usage(`${k.why} node skin-auto.mjs font list shows them.`)
+      wants.font = k.key
+    }
+  }
+}
 let skinArgs = []
 if (isBatch) skinArgs = batchArgs()
 // The public release (tick only) takes a preset or remove; the developer modes (probes, state, selftest, reset) stay
 // in the development copy, where release.json is absent.
 else if (!oneClickShipped && ['state', 'selftest', 'reset', 'probe', 'type-probe', 'menu-probe'].includes(arg)) usage(`${arg} is a developer mode and is not in this release. Use: node skin-auto.mjs tick <preset|remove>.`)
 else if (['remove', 'state', 'selftest', 'reset', 'probe', 'type-probe', 'menu-probe'].includes(arg)) skinArgs = [arg]
-else if (arg && !['switch', 'status', 'check', 'type'].includes(verb)) {
+else if (arg && !['switch', 'status', 'check', 'type', 'font', 'set', 'look'].includes(verb)) {
   // A bare preset name means presets/<name>.css. Only Reskin's own presets are applied (as AGENTS.md says), so
   // an agent or a script cannot slip in a stylesheet of its own; a path is accepted only when it is one of those presets.
   const real = (f) => { try { return nodeFs.realpathSync(f) } catch { return null } }
@@ -224,13 +262,27 @@ const identity = (pid) => identityOf(run('/bin/ps', ['-o', 'command=', '-p', Str
 const procOf = (pid) => parsePs(spawnSync('/bin/ps', ['-o', 'lstart=,comm=', '-p', String(pid)], { encoding: 'utf8', timeout: 4_000, env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }))
 const portLine = () => { const r = spawnSync('/usr/sbin/lsof', ['-nP', '-iTCP:9229', '-sTCP:LISTEN'], { encoding: 'utf8', timeout: 4_000 }); return portState({ status: r.status, error: r.error, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }) }
 // P5: remember the preference (a preset name), never the permission. Failing to save it never fails a run.
-// `type` keeps what was saved unless given: a skin change or Off leaves the remembered type as it was.
-const savePrefs = (last, type = readPrefs(nodeFs, STATE).type) => {
+// `type` and `font` keep what was saved unless given: a skin change or Off leaves them as they were.
+const savePrefs = (last, type = readPrefs(nodeFs, STATE).type, font = readPrefs(nodeFs, STATE).font) => {
   try {
     if (privateDir(nodeFs, STATE).missing) nodeFs.mkdirSync(STATE, { recursive: true, mode: 0o700 })
-    if (privateDir(nodeFs, STATE).ok) writePrivateJson(nodeFs, STATE, 'prefs.json', { v: 1, last, type }, randomUUID)
+    if (privateDir(nodeFs, STATE).ok) writePrivateJson(nodeFs, STATE, 'prefs.json', { v: 1, last, type, font }, randomUUID)
   } catch {}
 }
+// Is this font installed on this Mac? One fixed read-only script, the family name passed as its argument, 4 s at most.
+const installedOne = (name) => fontInstalled(spawnSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', FONT_INSTALLED_JXA, fontFamily(name)], { encoding: 'utf8', timeout: 4_000, killSignal: 'SIGKILL' }))
+// A font key or a whole look: 'yes' only when every font it turns on is installed ('no' if any is not; 'failed' if one
+// could not be checked). A look with no font of its own needs nothing.
+const installedNow = (key) => {
+  const ids = parseLook(key)
+  if (ids === null) return installedOne(key)
+  let out = 'yes'
+  for (const f of lookFonts(ids)) { const r = installedOne(f); if (r === 'no') return 'no'; if (r !== 'yes') out = 'failed' }
+  return out
+}
+// What a gen 8 helper offers: its part ids (font picker). A font key or look is offered when every part is.
+const partsOf = (live) => (Array.isArray(live.session?.parts) ? live.session.parts : [])
+const offersOf = (live) => ({ includes: (key) => lookOffered(key, partsOf(live)) })
 // This run's pid in the private folder while it holds the run lock, so an older run's guardian A can tell a
 // newer Reskin run (it stands down for it) from any other program on the lock port (it does not). Best effort: without
 // the mark, an old guardian simply keeps closing, which is the safe side.
@@ -245,9 +297,14 @@ const unmarkRun = () => {
   if (!marked) return
   try { if (nodeFs.readFileSync(`${STATE}/run-pid`, 'utf8') === String(process.pid)) nodeFs.unlinkSync(`${STATE}/run-pid`) } catch {}
 }
-const reapplyOffer = (last, type = false) => (last ? `Reapply ${last}? Run: /skin ${last} (or: node skin-auto.mjs tick ${last}); it needs one tick of Developer > Enable Main Process Debugger.${type ? ' Then /skin type on for the bold headers (no tick).' : ''}`
-  // No skin was on, only the bold headers: the helper still needs one skin to start it, then Off keeps Claude's colours. Starts with "Reapply " so the mod's list keeps it.
-  : type ? 'Reapply the bold headers? Run any skin, for example /skin nord (or: node skin-auto.mjs tick nord); it needs one tick of Developer > Enable Main Process Debugger. Then /skin off and /skin type on (no tick).' : null)
+// After a restart: the next tick puts the skin on and then restores the remembered headers and font itself (no second
+// tick), so the offer names them. Starts with "Reapply " so the mod's list keeps it.
+const reapplyOffer = (last, type = false, font = null) => {
+  const extras = [type ? 'the project headers' : null, fontShipped && font ? `the font ${font}` : null].filter(Boolean).join(' and ')
+  if (last) return `Reapply ${last}? Run: /skin ${last} (or: node skin-auto.mjs tick ${last}); it needs one tick of Developer > Enable Main Process Debugger.${extras ? ` That also brings back ${extras}.` : ''}`
+  // No skin was on, only headers or a font: the helper still needs one skin to start it, then Off keeps Claude's colours.
+  return extras ? `Reapply ${extras}? Run any skin, for example /skin nord (or: node skin-auto.mjs tick nord); it needs one tick of Developer > Enable Main Process Debugger and brings them back. Then /skin off keeps Claude's own colours.` : null
+}
 
 // Health check (17 Oct 2026): read-only, through the colour helper. No port, no tick, no stylesheet change.
 const TESTED_FILE = path.join(here, 'tested-versions.json')
@@ -268,7 +325,7 @@ async function healthCheck(live, prefs) {
   if (live.state === 'outdated') return ['refused', EXIT.refused, [`health: unknown (${live.why})`, DEBUGGER_UNUSED]]
   if (live.state === 'unknown') return ['refused', EXIT.refused, [`health: unknown (could not tell whether a colour helper is running: ${live.why})`, DEBUGGER_UNUSED]]
   if (live.state === 'none') {
-    return ['ok', EXIT.ok, [`health: unknown (no colour helper in this Claude: ${live.why}; the check works through the helper, which the first skin after Claude starts puts in)`, DEBUGGER_UNUSED, 'helper: none', reapplyOffer(prefs.last, prefs.type)]]
+    return ['ok', EXIT.ok, [`health: unknown (no colour helper in this Claude: ${live.why}; the check works through the helper, which the first skin after Claude starts puts in)`, DEBUGGER_UNUSED, 'helper: none', reapplyOffer(prefs.last, prefs.type, prefs.font)]]
   }
   if (!Array.isArray(live.session.caps) || !live.session.caps.includes('check')) {
     // An older helper would count the request as ignored: nothing is sent.
@@ -287,11 +344,24 @@ async function healthCheck(live, prefs) {
   if (j.version) {
     try { writePrivateJson(nodeFs, STATE, 'last-check.json', { v: 1, version: j.version, verdict: j.verdict, at: new Date().toISOString() }, randomUUID) } catch {}
   }
-  return [rep.code === 0 ? 'ok' : 'failed', rep.code === 0 ? EXIT.ok : EXIT.failed, [...rep.lines, typeLine(ack), '(as the colour helper reports; no debugger checked it)', DEBUGGER_UNUSED, helperActiveLine(live.session.version)]]
+  return [rep.code === 0 ? 'ok' : 'failed', rep.code === 0 ? EXIT.ok : EXIT.failed, [...rep.lines, typeLine(ack), ...(fontShipped || typeof ack.font === 'string' ? fontLines(ack, typeof ack.font === 'string' && parseLook(ack.font) !== null ? installedNow(ack.font) : null) : []), '(as the colour helper reports; no debugger checked it)', DEBUGGER_UNUSED, helperActiveLine(live.session.version)]]
 }
 
-// Type (2 Nov 2026): project headers in the Code tab sidebar bold and the same size as the session names, through the
-// colour helper only (its own sheet beside the colours; /skin off keeps it, remove takes it). No tick, no port.
+// Type and font (2 and 3 Nov 2026): both live in one type slot inside Claude, beside the colours, changed through the
+// colour helper only (/skin off keeps them, remove takes them). No tick, no port. The helper composes the change from
+// what is really on (headers, font) and answers with what it proved; only that proven pair is saved.
+const SLOT_WAIT_MS = 30_000 // more than the helper's own budget for a change that clears, applies and cleans up
+const NO_PORT = 'debugger: not used (switching needs no port)'
+const pairOk = slotPairOk
+async function slotChange(live, action, { save = true } = {}) {
+  const { ack } = await sendSwitch(nodeFs, STATE, live.session.session, action, { randomUUID, waitMs: SLOT_WAIT_MS })
+  if (ack === null || ack.action !== action) return { ack: null }
+  if (!save) return { ack } // the one-line command saves once, from its final proven pair
+  // Saved only from a proven result, and both halves together, so a later change never builds on a guess.
+  // A copy without fonts keeps the remembered font: it cannot see or set one, so its null means nothing.
+  if (pairOk(ack.verified)) { const p = readPrefs(nodeFs, STATE); savePrefs(p.last, ack.verified.headers, fontShipped ? ack.verified.font : p.font) }
+  return { ack }
+}
 async function typeRun(live, which) {
   if (which !== 'on' && which !== 'off') return ['refused', EXIT.usage, ['Usage: node skin-auto.mjs type on|off']]
   if (live.state === 'outdated') return ['refused', EXIT.refused, [`${live.why} Nothing was changed.`]]
@@ -302,19 +372,105 @@ async function typeRun(live, which) {
   if (which === 'on' && (!Array.isArray(live.session.caps) || !live.session.caps.includes('type'))) {
     // The helper generation is current here, so a missing cap means this copy offered no type sheet: a tick cannot fix that.
     // Off is never gated: the helper always accepts type-off, as it only removes.
-    return ['refused', EXIT.refused, ['Type is not available in this copy of Reskin (its type sheet is missing or did not pass its check), so nothing was changed. Reinstall Reskin to get it back.', 'debugger: not used (switching needs no port)', helperActiveLine(live.session.version)]]
+    return ['refused', EXIT.refused, ['Type is not available in this copy of Reskin (its type sheet is missing or did not pass its check), so nothing was changed. Reinstall Reskin to get it back.', NO_PORT, helperActiveLine(live.session.version)]]
   }
-  const { ack } = await sendSwitch(nodeFs, STATE, live.session.session, `type-${which}`, { randomUUID, waitMs: 10_000 })
-  if (ack === null || ack.action !== `type-${which}`) {
-    return ['failed', EXIT.failed, [`type ${which} unconfirmed: the colour helper did not answer within 10 s. Nothing else was tried (no tick, no port).`, 'debugger: not used (switching needs no port)', 'helper: not answering']]
-  }
-  if (ack.ok) savePrefs(readPrefs(nodeFs, STATE).last, which === 'on')
+  const { ack } = await slotChange(live, `type-${which}`)
+  if (ack === null) return ['failed', EXIT.failed, [`type ${which} unconfirmed: the colour helper did not answer within ${SLOT_WAIT_MS / 1000} s. Nothing else was tried (no tick, no port).`, NO_PORT, 'helper: not answering']]
+  const font = pairOk(ack.verified) && ack.verified.font ? ` The font ${ack.verified.font} stays on.` : ''
   return [ack.ok ? 'ok' : 'failed', ack.ok ? EXIT.ok : EXIT.failed, [
-    ack.ok ? (which === 'on' ? `Type on: ${TYPE_WHAT} (${ack.applied} of ${ack.eligible} Claude page(s)). It stays through skin changes and /skin off; /skin type off or /skin remove takes it off.` : `Type off: Claude's own header type is back${ack.reloaded ? ` (${ack.reloaded} page(s) reloaded to be sure)` : ''}.`)
-      : `The helper could not turn type ${which}: ${(ack.errors ?? []).join('; ') || 'no reason given'}`,
-    '(as the colour helper reports; no debugger checked it)',
-    'debugger: not used (switching needs no port)',
-    helperActiveLine(live.session.version),
+    ack.ok ? (which === 'on' ? `Type on: ${TYPE_WHAT} (${ack.applied} of ${ack.eligible} Claude page(s)). It stays through skin changes and /skin off; /skin type off or /skin remove takes it off.${font}` : `Type off: Claude's own header type is back${ack.reloaded ? ` (${ack.reloaded} page(s) reloaded to be sure)` : ''}.${font}`)
+      : slotFailLine(`Type ${which}`, ack),
+    '(as the colour helper reports; no debugger checked it)', NO_PORT, helperActiveLine(live.session.version),
+  ]]
+}
+async function fontRun(live, typed) {
+  const names = Object.keys(FONT_STACKS)
+  const typedKey = typed === 'off' || typed === 'list' ? null : fontKeyOf(typed)
+  const which = typed === 'off' || typed === 'list' ? typed : typedKey.key ?? typed
+  if (which === 'list') {
+    return ['ok', EXIT.ok, [...names.map((n) => { const i = installedNow(n); return `/skin font ${n}  (${fontFamily(n)}, ${i === 'yes' ? 'installed' : i === 'no' ? 'not installed' : 'could not check whether it is installed'}; free download: ${FONT_LINKS[n]})` }), '/skin font off  (back to Claude\'s own font)', `Add a size ${FONT_SIZES[0]} to ${FONT_SIZES[FONT_SIZES.length - 1]} for chat text and the message box: /skin font plex 16 (Claude's own Transcript text size: Small 14, Medium 15, Large 16).`, 'All are free (SIL Open Font License). No tick needed. The full name works too, for example /skin font IBM Plex Sans.']]
+  }
+  if (which !== 'off' && splitFontKey(which) === null) return ['refused', EXIT.usage, [`Usage: node skin-auto.mjs font <${names.join('|')}>[-<size ${FONT_SIZES[0]} to ${FONT_SIZES[FONT_SIZES.length - 1]}>]|off|list${typedKey?.why ? ` (${typedKey.why})` : ''}`]]
+  if (live.state === 'outdated') return ['refused', EXIT.refused, [`${live.why} Nothing was changed.`]]
+  if (live.state === 'unknown') return ['refused', EXIT.refused, [`Could not tell whether a colour helper is running (${live.why}). Nothing was changed.`]]
+  if (live.state === 'none') {
+    return ['refused', EXIT.refused, [`No colour helper is running in this Claude (${live.why}), so nothing was changed. ${which !== 'off' ? `Apply a skin first (/skin <name>, one tick), then run /skin font ${which}.` : 'Without a helper there is nothing to turn off: quitting and reopening Claude clears it.'}`]]
+  }
+  if (which !== 'off') {
+    if (!Array.isArray(live.session.caps) || !live.session.caps.includes('font') || !offersOf(live).includes(which)) {
+      return ['refused', EXIT.refused, [`The font ${which} is not available in this colour helper, so nothing was changed. Apply a skin with a new tick (/skin <name> --tick) to give the helper this copy's fonts.`, NO_PORT, helperActiveLine(live.session.version)]]
+    }
+    // Inside Claude a missing font would quietly show the system font instead, so it is checked first.
+    const i = installedNow(which)
+    if (i === 'no') return ['refused', EXIT.refused, [`${fontFamily(which)} is not installed on this Mac, so nothing was changed. It is free: download it from ${FONT_LINKS[fontBase(which)]}, install it (double-click the file, then Install Font), then run /skin font ${which} again.`, NO_PORT]]
+    if (i === 'failed') return ['refused', EXIT.refused, [`Could not check whether ${fontFamily(which)} is installed, so nothing was changed. Try again; /skin font off always works.`, NO_PORT]]
+  }
+  const action = which === 'off' ? 'font-off' : `font-${which}`
+  const { ack } = await slotChange(live, action)
+  if (ack === null) return ['failed', EXIT.failed, [`font ${which} unconfirmed: the colour helper did not answer within ${SLOT_WAIT_MS / 1000} s. Nothing else was tried (no tick, no port).`, NO_PORT, 'helper: not answering']]
+  const headers = pairOk(ack.verified) && ack.verified.headers ? ' The project headers stay on.' : ''
+  return [ack.ok ? 'ok' : 'failed', ack.ok ? EXIT.ok : EXIT.failed, [
+    ack.ok ? (which === 'off' ? `Font off: Claude's own font is back${ack.reloaded ? ` (${ack.reloaded} page(s) reloaded to be sure)` : ''}.${headers}` : `Font ${which} on: ${fontFamily(which)} for chat text, replies, the message box, buttons and the sidebar${splitFontKey(which).size === null ? '' : `, at ${splitFontKey(which).size}px for chat text and the message box`} (${ack.applied} of ${ack.eligible} Claude page(s)). It stays through skin changes and /skin off; /skin font off or /skin remove takes it off.${headers}`)
+      : slotFailLine(`Font ${which}`, ack),
+    which !== 'off' && ack.ok ? FONT_MENU_LINE : null,
+    which !== 'off' && ack.ok && splitFontKey(which).size !== null ? SIZE_MENU_LINE : null,
+    '(as the colour helper reports; no debugger checked it)', NO_PORT, helperActiveLine(live.session.version),
+  ]]
+}
+
+// The font picker (4 Nov 2026): `look show` reads what the helper proves is on now (one fresh read-only check; never a
+// saved file) and prints it as one `LOOK: {json}` line for the /skin fonts card, plus plain lines. `look set <section>
+// font=<name|same|claude> size=<n|claude> weight=<n|claude>` changes ONE section: it merges the wanted choices into the
+// look the helper proves now (refused when that is unknown), checks the whole result (weights the fonts have, every part
+// offered by this helper, every font installed), then sends it as one font request. Prefs only from the proven answer.
+const LOOK_USAGE = `Usage: node skin-auto.mjs look show | look set <all|${Object.keys(SECTIONS).join('|')}> font=<name|same|claude> size=<number|claude> weight=<number|claude> (all: font only)`
+const sectionLabel = (sec) => (sec === 'all' ? 'All parts' : SECTIONS[sec].label)
+const lookJson = (o) => `LOOK: ${JSON.stringify(o)}`
+async function lookRun(live) {
+  const [sub, sec, ...opts] = args.filter((a) => !a.startsWith('--'))
+  if (sub !== 'show' && sub !== 'set') return ['refused', EXIT.usage, [LOOK_USAGE]]
+  if (sub === 'show' && (sec !== undefined || opts.length)) return ['refused', EXIT.usage, [LOOK_USAGE]]
+  let want = null
+  if (sub === 'set') {
+    if (sec !== 'all' && !Object.hasOwn(SECTIONS, sec ?? '')) return ['refused', EXIT.usage, [`${sec ? `No section called ${String(sec).slice(0, 20)}. ` : ''}${LOOK_USAGE}`]]
+    const w = lookSetWants(sec, opts)
+    if (w.why) return ['refused', EXIT.usage, [w.why === 'usage' ? LOOK_USAGE : w.why]]
+    want = w.want
+  }
+  if (live.state === 'outdated') return ['refused', EXIT.refused, [lookJson({ helper: 'outdated' }), `${live.why} Nothing was changed.`]]
+  if (live.state === 'unknown') return ['refused', EXIT.refused, [lookJson({ helper: 'unknown' }), `Could not tell whether a colour helper is running (${live.why}). Nothing was changed.`]]
+  if (live.state === 'none') return ['refused', EXIT.refused, [lookJson({ helper: 'none' }), `No colour helper is running in this Claude (${live.why}), so nothing was changed. Fonts need it: start with a skin, for example /skin dracula --tick.`]]
+  const caps = Array.isArray(live.session.caps) ? live.session.caps : []
+  if (!caps.includes('look') || !caps.includes('check')) return ['refused', EXIT.refused, [lookJson({ helper: 'old' }), 'The font picker needs the new colour helper: quit and reopen Claude, then apply a skin with one tick (/skin <name> --tick). Nothing was changed.', NO_PORT]]
+  const { ack: seen } = await sendSwitch(nodeFs, STATE, live.session.session, 'check', { randomUUID, waitMs: 10_000 })
+  if (seen === null || seen.action !== 'check') return ['failed', EXIT.failed, [lookJson({ helper: 'noanswer' }), 'The colour helper did not answer within 10 s, so nothing was changed. Try again, or quit and reopen Claude.', NO_PORT, 'helper: not answering']]
+  const cur = seen.font === null ? [] : typeof seen.font === 'string' ? parseLook(seen.font) : null
+  const shown = { helper: 'active', look: cur, type: seen.type === 'on' ? 'on' : seen.type === 'off' ? 'off' : 'unknown', parts: partsOf(live) }
+  if (sub === 'show') {
+    return ['ok', EXIT.ok, [lookJson(shown), cur === null ? 'fonts: not proven now (an earlier change did not finish): /skin font off clears it' : cur.length === 0 ? "fonts: Claude's own everywhere" : `fonts: ${describeLook(cur).join('; ')}`, NO_PORT]]
+  }
+  if (cur === null) return ['refused', EXIT.refused, [lookJson(shown), 'The font state could not be proven, so nothing was changed. Run /skin font off, then try again.', NO_PORT]]
+  const m = mergeSection(cur, sec, want)
+  if (m.why) return ['refused', EXIT.usage, [lookJson(shown), `${m.why} Nothing was changed.`]]
+  const key = lookKey(m.ids)
+  if (key !== null) {
+    if (!caps.includes('font') || !lookOffered(key, partsOf(live))) return ['refused', EXIT.refused, [lookJson(shown), 'That choice is not available in this colour helper, so nothing was changed. Apply a skin with a new tick (/skin <name> --tick) to give it this copy\'s fonts.', NO_PORT]]
+    for (const f of lookFonts(m.ids)) {
+      const i = installedOne(f)
+      if (i === 'no') return ['refused', EXIT.refused, [lookJson(shown), `${fontFamily(f)} is not installed on this Mac, so nothing was changed. It is free: download it from ${FONT_LINKS[f]}, install it (double-click the file, then Install Font), then try again.`, NO_PORT]]
+      if (i !== 'yes') return ['refused', EXIT.refused, [lookJson(shown), `Could not check whether ${fontFamily(f)} is installed, so nothing was changed. Try again.`, NO_PORT]]
+    }
+  }
+  const { ack } = await slotChange(live, key === null ? 'font-off' : `font-${key}`)
+  if (ack === null) return ['failed', EXIT.failed, [lookJson({ ...shown, look: null }), `The change is unconfirmed: the colour helper did not answer within ${SLOT_WAIT_MS / 1000} s. Nothing else was tried (no tick, no port).`, NO_PORT, 'helper: not answering']]
+  const proven = pairOk(ack.verified) ? (ack.verified.font === null ? [] : parseLook(ack.verified.font)) : null
+  return [ack.ok ? 'ok' : 'failed', ack.ok ? EXIT.ok : EXIT.failed, [
+    // An answer without proof says so; "Claude's own everywhere" only for a proven empty look.
+    lookJson({ ...shown, look: proven, type: pairOk(ack.verified) ? (ack.verified.headers ? 'on' : 'off') : 'unknown' }),
+    !ack.ok ? slotFailLine(sectionLabel(sec), ack)
+      : proven === null ? `${sectionLabel(sec)} sent, but what is on now is not proven (something else changed the fonts meanwhile): run /skin check, or open /skin fonts again.`
+      : `${sectionLabel(sec)} done. ${proven.length ? `Fonts now: ${describeLook(proven).join('; ')}.` : "Claude's own fonts everywhere now."} It stays through skin changes and /skin off; /skin font off or /skin remove takes it off.`,
+    '(as the colour helper reports; no debugger checked it)', NO_PORT, helperActiveLine(live.session.version),
   ]]
 }
 
@@ -338,11 +494,16 @@ async function helperRun() {
       `last skin: ${prefs.last ?? 'none'}`,
       ...healthHint(live),
       `type: ${prefs.type ? 'on when last set' : 'off'}`,
-      live.state === 'outdated' || live.state === 'unknown' ? (live.state === 'outdated' ? live.why : 'Quit and reopen Claude, then run /skin again.') : live.state !== 'active' ? reapplyOffer(prefs.last, prefs.type) : null,
+      fontShipped ? `font: ${prefs.font ? `${prefs.font} when last set` : 'off'}` : null,
+      fontShipped && prefs.font && live.state === 'active' ? FONT_MENU_LINE : null,
+      live.state === 'outdated' || live.state === 'unknown' ? (live.state === 'outdated' ? live.why : 'Quit and reopen Claude, then run /skin again.') : live.state !== 'active' ? reapplyOffer(prefs.last, prefs.type, prefs.font) : null,
     ])
   }
   if (verb === 'check') return end(...(await healthCheck(live, prefs)))
   if (verb === 'type') return end(...(await typeRun(live, args[0])))
+  if (verb === 'font') return end(...(await fontRun(live, args.filter((a) => !a.startsWith('--')).join(' '))))
+  if (verb === 'set') return end(...(await setRun(live)))
+  if (verb === 'look') return end(...(await lookRun(live)))
   const action = args[0]
   if (!action || !(action === 'off' || action === 'remove' || (PRESET_NAME.test(action) && !action.startsWith('dotcheck-') && existsSync(presetFile(action))))) {
     return end('refused', EXIT.usage, [`Usage: node skin-auto.mjs switch <preset|off|remove>. ${action ? `No preset called ${action}.` : ''}`])
@@ -374,7 +535,7 @@ async function helperRun() {
     }
     const gone = readPrivateJson(nodeFs, `${STATE}/session.json`).missing === true
     const ok = done?.ok === true && gone
-    if (ok) savePrefs(null, false)
+    if (ok) savePrefs(null, false, null)
     return end(ok ? 'ok' : 'failed', ok ? EXIT.ok : EXIT.failed, [
       ok ? 'Skin and colour helper removed, as the helper itself reports (no debugger was used to check it, and a program running as you could fake that report; quitting and reopening Claude is the proof). The next skin needs one tick.'
         : done === null ? 'Removal not confirmed: the helper accepted it but did not report that it finished. Check with /skin status (or: node skin-auto.mjs status).'
@@ -384,17 +545,92 @@ async function helperRun() {
       'helper: ' + (gone ? 'none (as the helper reports)' : 'unknown'),
     ])
   }
-  const mode = ack.dark === true ? 'dark' : ack.dark === false ? 'light' : null
-  const checks = action === 'off' ? null : mode === null ? null : judgeChecks(ack.samples, expectedColours(readFileSync(presetFile(action), 'utf8'), mode))
-  if (ack.ok) savePrefs(action === 'off' ? null : action)
   return end(ack.ok ? 'ok' : 'failed', ack.ok ? EXIT.ok : EXIT.failed, [
-    ack.ok ? (action === 'off' ? 'Skin off (the helper stays, so the next skin needs no tick).' : `Skin ${action} applied by the colour helper.`) : `The helper could not apply it: ${(ack.errors ?? []).join('; ') || 'no reason given'}`,
-    action === 'off' ? 'sampled colour checks: not applicable (skin off)' : checksLine(checks, mode),
+    ...colourResult(action, ack),
     'debugger: not used (switching needs no port)',
     helperActiveLine(live.session.version),
   ])
 }
-if (verb === 'switch' || verb === 'status' || verb === 'check' || verb === 'type') await helperRun()
+// A colour switch's answer (a preset or off) -> its two report lines; the preference is saved only when it went on.
+function colourResult(action, ack) {
+  const mode = ack.dark === true ? 'dark' : ack.dark === false ? 'light' : null
+  const checks = action === 'off' ? null : mode === null ? null : judgeChecks(ack.samples, expectedColours(readFileSync(presetFile(action), 'utf8'), mode))
+  if (ack.ok) savePrefs(action === 'off' ? null : action)
+  return [
+    ack.ok ? (action === 'off' ? 'Skin off (the helper stays, so the next skin needs no tick).' : `Skin ${action} applied by the colour helper.`) : `The helper could not apply it: ${(ack.errors ?? []).join('; ') || 'no reason given'}`,
+    action === 'off' ? 'sampled colour checks: not applicable (skin off)' : checksLine(checks, mode),
+  ]
+}
+
+// The one-line command through the helper (3 Nov 2026): the whole line is checked first (any bad part refuses it, nothing
+// sent), then skin, font, type in that order, each through its own reviewed request. It stops at the first part that
+// fails or gets no answer; parts before it stay (no rollback), parts after it are not tried. The font and type parts are
+// reported from the helper's last proven pair, so a part that a later cleanup took off again says so, and after an
+// unanswered request nothing is called proven. Prefs are saved from that final proven pair only.
+const SET_SWITCH_WAIT_MS = 10_000 // the helper allows a colour change 8 s
+const isPresetName = (n) => PRESET_NAME.test(n) && !n.startsWith('dotcheck-') && existsSync(presetFile(n))
+async function setRun(live) {
+  if (args.some((a) => a.startsWith('--'))) return ['refused', EXIT.usage, ['set takes no options. Without a colour helper, use: node skin-auto.mjs tick <preset> --want-font=<name|off> --want-type=on|off']]
+  let line
+  try { line = parseSetLine(args, { isPreset: isPresetName, fonts: fontShipped }) } catch (e) { return ['refused', EXIT.usage, [String(e.message)]] }
+  if (live.state === 'outdated') return ['refused', EXIT.refused, [`${live.why} Nothing was changed.`]]
+  if (live.state === 'unknown') return ['refused', EXIT.refused, [`Could not tell whether a colour helper is running (${live.why}). Nothing was changed.`]]
+  if (live.state === 'none') {
+    // Nothing was sent. With a preset, /skin starts a tick run that carries the font and type parts (--want-*).
+    const wantArgs = [line.font === undefined ? null : `--want-font=${line.font === 'off' ? 'off' : fontKey(line.font.name, line.font.size)}`, line.type === undefined ? null : `--want-type=${line.type ? 'on' : 'off'}`].filter(Boolean).join(' ')
+    return ['refused', EXIT.refused, [`No colour helper is running in this Claude (${live.why}), so nothing was changed. ${line.skin !== null && line.skin !== 'off'
+      ? `It needs one tick of Developer > Enable Main Process Debugger: /skin ${args.join(' ')} --tick (or: node skin-auto.mjs tick ${line.skin}${wantArgs ? ` ${wantArgs}` : ''}).`
+      : 'Start with a skin, for example /skin dracula font plex type on (one tick). Turning colours off while setting a font or type needs a running colour helper.'}`]]
+  }
+  // Every part is checked before anything is sent. Turning something off is never gated (the helper always accepts it).
+  const caps = Array.isArray(live.session.caps) ? live.session.caps : []
+  const fonts = offersOf(live)
+  if (line.type === true && !caps.includes('type')) return ['refused', EXIT.refused, ['Type is not available in this colour helper (this copy offered no type sheet), so nothing was changed.', NO_PORT, helperActiveLine(live.session.version)]]
+  if (line.font !== undefined && line.font !== 'off') {
+    const n = fontKey(line.font.name, line.font.size)
+    if (!caps.includes('font') || !fonts.includes(n)) return ['refused', EXIT.refused, [`The font ${n} is not available in this colour helper, so nothing was changed. Apply a skin with a new tick (/skin <name> --tick) to give the helper this copy's fonts.`, NO_PORT, helperActiveLine(live.session.version)]]
+    const i = installedNow(n)
+    if (i === 'no') return ['refused', EXIT.refused, [`${fontFamily(n)} is not installed on this Mac, so nothing was changed. It is free: download it from ${FONT_LINKS[fontBase(n)]}, install it, then run the line again.`, NO_PORT]]
+    if (i === 'failed') return ['refused', EXIT.refused, [`Could not check whether ${fontFamily(n)} is installed, so nothing was changed. Try again.`, NO_PORT]]
+  }
+  const { failed, final, out } = await runSetParts(line, {
+    colour: async (skin) => {
+      const { ack } = await sendSwitch(nodeFs, STATE, live.session.session, skin, { randomUUID, waitMs: SET_SWITCH_WAIT_MS })
+      return ack === null ? null : { ok: ack.ok === true, lines: colourResult(skin, ack) }
+    },
+    slot: async (action) => (await slotChange(live, action, { save: false })).ack,
+    colourWaitS: SET_SWITCH_WAIT_MS / 1000, slotWaitS: SLOT_WAIT_MS / 1000,
+  })
+  if (final !== null) { const p = readPrefs(nodeFs, STATE); savePrefs(p.last, final.headers, fontShipped ? final.font : p.font) }
+  const fontOn = final !== null && final.font !== null && line.font !== undefined && line.font !== 'off'
+  return [failed ? 'failed' : 'ok', failed ? EXIT.failed : EXIT.ok, [
+    ...out,
+    fontOn ? FONT_MENU_LINE : null,
+    fontOn && splitFontKey(final.font)?.size ? SIZE_MENU_LINE : null,
+    '(as the colour helper reports; no debugger checked it)', NO_PORT, helperActiveLine(live.session.version),
+  ]]
+}
+// A combined tick line: before anything starts (no lock, no prompt, no tick), every part that turns something on is
+// checked against what this copy would give the new helper (skin.mjs slot-offers, the same checked sheets) and, for a
+// font, against what is installed. Turning something off is never gated.
+if (hasWants) {
+  if (appliedPreset === null) usage('Font and type parts go with a preset, for example: node skin-auto.mjs tick dracula --want-font=plex --want-type=on')
+  if ((wants.font !== undefined && wants.font !== 'off') || wants.type === 'on') {
+    const r = spawnSync(NODE, [SKIN, 'slot-offers'], { encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL' })
+    let offers = null
+    try { offers = r.status === 0 ? JSON.parse(String(r.stdout).trim()) : null } catch {}
+    const early = (m) => { console.error(m); console.log('PORT_STATE: unknown'); finish('refused', EXIT.refused) }
+    if (offers === null || typeof offers !== 'object' || !Array.isArray(offers.parts)) early('Could not check which font and type sheets this copy offers, so nothing was started.')
+    if (wants.type === 'on' && offers.headers !== true) early('Type is not available in this copy of Reskin (its type sheet is missing or did not pass its check), so nothing was started.')
+    if (wants.font !== undefined && wants.font !== 'off') {
+      if (!lookOffered(wants.font, offers.parts)) early(`The font ${wants.font} is not available in this copy of Reskin, so nothing was started.`)
+      const i = installedNow(wants.font)
+      if (i === 'no') early(`${fontLabel(wants.font)} is not installed on this Mac, so nothing was started. Each font is free: /skin font list shows where to download it.`)
+      if (i === 'failed') early(`Could not check whether ${fontLabel(wants.font)} is installed, so nothing was started. Try again.`)
+    }
+  }
+}
+if (verb === 'switch' || verb === 'status' || verb === 'check' || verb === 'type' || verb === 'font' || verb === 'set' || verb === 'look') await helperRun()
 
 if (checkOnly) {
   const chrome = chromeState()
@@ -476,7 +712,7 @@ function absorb(out, code) {
   if (skinArgs[0] === 'remove' || skinArgs[0] === 'reset') {
     report.checks = 'sampled colour checks: not applicable (skin removed)'
     report.helper = code === 0 ? 'helper: none (removed)' : 'helper: unknown (the removal did not fully succeed; check with /skin status or node skin-auto.mjs status)'
-    if (code === 0) savePrefs(null, false)
+    if (code === 0) savePrefs(null, false, null)
     return
   }
   if (skinArgs[0] !== 'apply') return
@@ -612,11 +848,11 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 }
 // After 60 s the run stops waiting and starts cleaning up (cleanup itself is bounded by per-command limits, so the
 // total can be longer; the mod allows 180 s).
-const RUN_LIMIT_MS = tickMode ? TICK.runLimitMs : 60_000
+const RUN_LIMIT_MS = tickMode ? (hasWants ? TICK.runLimitWantsMs : TICK.runLimitMs) : 60_000
 deadline = setTimeout(() => {
   console.error(`Took too long (${RUN_LIMIT_MS / 1000} s); stopping and starting cleanup.`)
   void cleanup('timeout').finally(() => { console.log('RESULT: failed'); process.exit(exitOverride ?? EXIT.timeout) })
-}, RUN_LIMIT_MS)
+}, Math.max(1_000, RUN_LIMIT_MS - (Date.now() - RUN_START)))
 
 class Refused extends Error {}
 const refuse = (m) => { throw new Refused(m) }
@@ -923,7 +1159,43 @@ async function tickRun() {
   // P3: the colour checks, now that the debugger is closed: the helper puts the same preset on again and answers with
   // the sampled colours and Claude's mode. No port, no tick; an unanswered check is "unknown", never a pass.
   if (skinOk && report.deferred && (await deferredChecks()) === 'failed') skinOk = false
+  // An explicit font or type part of a combined line that does not complete fails the run, although the skin is on.
+  if (skinOk && appliedPreset !== null && !(await restoreSlot())) skinOk = false
   return skinOk ? EXIT.ok : EXIT.failed
+}
+
+// After a restart (3 Nov 2026): the remembered headers and font come back in the same tick run, through the helper this
+// run just started, with no second tick. Only after the skin is confirmed and the debugger confirmed closed, while this
+// run still holds the lock. A restore that fails or gets no answer never fails the skin; it says so on its own line.
+// A copy without fonts (release.json) skips the font and keeps it remembered.
+// A combined tick line (--want-font, --want-type) sends its own parts first, through the same steps as the helper path
+// (runSetParts: font, then type, stop at the first that does not complete, judged from the last proven pair), each with
+// the full slot wait; a part it names replaces the remembered one, a part it leaves out is restored as before.
+// Returns false only when a part of the line did not complete (the run then fails although the skin is on).
+async function restoreSlot() {
+  const prefs = readPrefs(nodeFs, STATE)
+  const font = wants.font !== undefined ? null : fontShipped ? prefs.font : null
+  const type = wants.type !== undefined ? false : prefs.type
+  if (!hasWants && !type && font === null) return true
+  const say = (m) => console.log(`restore: ${m}`)
+  const tell = (m) => console.log(`part: ${m}`)
+  const skip = (why) => {
+    if (hasWants) tell(`font and type parts not tried (${why}): the skin itself is on. Run the same /skin line again (no tick needed once the helper answers).`)
+    if (type || font !== null) say(`skipped (${why}): run /skin type on or /skin font <name> yourself`)
+    return !hasWants
+  }
+  if (!report.session || !/^[0-9a-f-]{36}$/.test(report.session) || !Number.isFinite(report.doorMs) || portNow().state !== 'closed') return skip('the debugger was not confirmed closed, or no new colour helper')
+  const live = liveSession(nodeFs, STATE, procOf, { claudeStart })
+  if (live.state !== 'active' || live.session.session !== report.session) return skip('the colour helper this run started is not the one answering')
+  const r = await restoreParts({
+    wants, prefs, type, font, fontShipped,
+    caps: Array.isArray(live.session.caps) ? live.session.caps : [], fonts: offersOf(live),
+    installed: installedNow, waits: { want: TICK.wantMs, restore: TICK.restoreMs / 2 },
+    send: async (action, waitMs) => { const { ack } = await sendSwitch(nodeFs, STATE, live.session.session, action, { randomUUID, waitMs }); return ack !== null && ack.action === action ? ack : null },
+  })
+  for (const l of r.lines) console.log(l)
+  if (r.save !== null) savePrefs(readPrefs(nodeFs, STATE).last, r.save.headers, r.save.font)
+  return r.ok
 }
 
 // Ends the skin child for sure: it was asked to stop; after 3 s (time for a running step to close the port) it is

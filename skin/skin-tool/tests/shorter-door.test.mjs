@@ -286,7 +286,7 @@ test('After waiting for the skin child, cleanup checks and closes the port once 
 test('A probe that answers after cleanup began starts no guardian; the time limit includes the proof wait', () => {
   assert.match(autoSrc, /if \(\(await tcpProbe\(\)\)\.state === 'open' && !stopping\)/)
   assert.match(autoSrc, /function startGuardianB\(\) \{\n  if \(guardianB \|\| stopping\) return/)
-  assert.equal(TICK.runLimitMs, 15_000 + TICK.windowMs + TICK.applyMs + TICK.confirmMs + 20_000)
+  assert.equal(TICK.runLimitMs, 15_000 + TICK.windowMs + TICK.applyMs + TICK.confirmMs + TICK.restoreMs + 20_000)
   assert.ok(TICK.runLimitMs < 180_000)
 })
 

@@ -402,9 +402,9 @@ test('client: private JSON reads refuse links, loose modes and other shapes; pre
     assert.match(readPrivateJson(nodeFs, path.join(d, 'c.json')).error, /object/)
     assert.equal(readPrivateJson(nodeFs, path.join(d, 'none.json')).missing, true)
     writePrivateJson(nodeFs, d, 'prefs.json', { v: 1, last: 'nord' }, randomUUID)
-    assert.deepEqual(readPrefs(nodeFs, d), { last: 'nord', type: false })
+    assert.deepEqual(readPrefs(nodeFs, d), { last: 'nord', type: false, font: null })
     writePrivateJson(nodeFs, d, 'prefs.json', { v: 1, last: '../etc' }, randomUUID)
-    assert.deepEqual(readPrefs(nodeFs, d), { last: null, type: false }) // a strange value never becomes a reapply offer
+    assert.deepEqual(readPrefs(nodeFs, d), { last: null, type: false, font: null }) // a strange value never becomes a reapply offer
   } finally { rmSync(d, { recursive: true, force: true }) }
 })
 
@@ -823,7 +823,7 @@ test('switch client end to end: apply, unconfirmed with no answer, remove report
         assert.match(sw.out, /sampled colour checks: \d+ of \d+ passed/)
         assert.match(sw.out, /debugger: not used/)
         assert.match(sw.out, /PORT_STATE: \w+\nRESULT: ok/)
-        assert.deepEqual(readPrefs(nodeFs, h.dir), { last: 'nord', type: false })
+        assert.deepEqual(readPrefs(nodeFs, h.dir), { last: 'nord', type: false, font: null })
         // The helper stops answering: unconfirmed, failed, and nothing else is tried.
         clearInterval(interval); h.h.stopped = true
         const quiet = await cli(h.dir, 'switch', 'dracula')
@@ -996,7 +996,7 @@ test('liveSession: an untrusted folder or session file is a leftover once it is 
   } finally { chmodSync(t.dir, 0o700); t.done() }
 })
 
-// Only the bold headers were on (skin off) when Claude quit: status still says how to get them back.
+// Only the project headers were on (skin off) when Claude quit: status still says how to get them back.
 test('status with no helper: a type-only preference gets its own reapply offer, none without one', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'reskin-typeonly-'))
   try {
@@ -1004,8 +1004,8 @@ test('status with no helper: a type-only preference gets its own reapply offer, 
     writePrivateJson(nodeFs, dir, 'prefs.json', { v: 1, last: null, type: true }, randomUUID)
     const on = await cli(dir, 'status')
     assert.match(on.out, /helper: none/); assert.match(on.out, /type: on when last set/)
-    assert.match(on.out, /^Reapply the bold headers\? Run any skin, for example \/skin nord .*Then \/skin off and \/skin type on \(no tick\)\.$/m)
-    assert.match((await cli(dir, 'check')).out, /^Reapply the bold headers\? /m) // the health check offers the same
+    assert.match(on.out, /^Reapply the project headers\? Run any skin, for example \/skin nord .*brings them back\. Then \/skin off keeps Claude's own colours\.$/m)
+    assert.match((await cli(dir, 'check')).out, /^Reapply the project headers\? /m) // the health check offers the same
     writePrivateJson(nodeFs, dir, 'prefs.json', { v: 1, last: null, type: false }, randomUUID)
     const off = await cli(dir, 'status')
     assert.match(off.out, /type: off/); assert.doesNotMatch(off.out, /Reapply/)

@@ -1,7 +1,8 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
-import type { On, RenderElement } from 'claude-code'
+import type { On, Plugin, RenderElement } from 'claude-code'
 
-import { ABOUT, CARD, DEV_MODE, TIME_UP, cardFacts, cardParagraph, countdownSvg, displayName, listText, modeOf, nodeCandidates, nodeMajorOk, noHelper, parse, skinSuggestions, oneClickOf, argumentHintOf, summary, toolDirCandidates } from '../hooks/logic'
+import { FONT_LABELS, FONT_WEIGHTS, SECTIONS, shortStatus, allPicks, defaultPicks, lookInfoOf, lookSummary, noLookText, picksOf, resultLineOf, setArgs, sizeOptions, weightOptions, withFont, fontOptions } from '../hooks/fonts'
+import { ABOUT, CARD, DEV_MODE, TIME_UP, cardFacts, cardParagraph, countdownSvg, displayName, listText, modeOf, nodeCandidates, nodeMajorOk, noHelper, parse, skinSuggestions, oneClickOf, fontsOf, FONT_NAMES, argumentHintOf, summary, toolDirCandidates } from '../hooks/logic'
 
 const EM = String.fromCharCode(8212)
 
@@ -134,7 +135,7 @@ describe('summary', () => {
 
 // ---- the command end to end, with a fake file system, fake runs and a fake streamed run ----
 const TOOL = '/tool'
-type Answers = { registerThrows?: boolean; defaults?: [number, string, string]; switch?: [number, string]; status?: [number, string]; check?: [number, string]; type?: [number, string]; tick?: string[]; tickCode?: number; spawn?: (argv: readonly string[], signal: AbortSignal) => AsyncGenerator<{ stream: 'stdout' | 'stderr'; text: string }, { value: { code: number | null; signal: string | null } }> }
+type Answers = { look?: (argv: readonly string[]) => [number, string]; registerThrows?: boolean; defaults?: [number, string, string]; switch?: [number, string]; status?: [number, string]; check?: [number, string]; type?: [number, string]; tick?: string[]; tickCode?: number; spawn?: (argv: readonly string[], signal: AbortSignal) => AsyncGenerator<{ stream: 'stdout' | 'stderr'; text: string }, { value: { code: number | null; signal: string | null } }> }
 function world(on: On, a: Answers = {}) {
   mock.store(on)
   const runs: (readonly string[])[] = []
@@ -171,7 +172,13 @@ function world(on: On, a: Answers = {}) {
     // Quick runs (switch, status) are streamed too since 0.6.0; they count as runs here, tick runs as spawns.
     if (e.argv[2] === 'type') {
       runs.push(e.argv)
-      const [code, text] = a.type ?? [0, 'Type on: bold project headers (1 of 1 Claude page(s)).\n(as the colour helper reports; no debugger checked it)\ndebugger: not used (switching needs no port)\nhelper: active until Claude quits (Claude 4.4212.0)\nPORT_STATE: closed\nRESULT: ok']
+      const [code, text] = a.type ?? [0, 'Type on: project headers with activity colours (1 of 1 Claude page(s)).\n(as the colour helper reports; no debugger checked it)\ndebugger: not used (switching needs no port)\nhelper: active until Claude quits (Claude 4.4212.0)\nPORT_STATE: closed\nRESULT: ok']
+      if (text) yield { stream: 'stdout', text }
+      return { value: { code, signal: null } }
+    }
+    if (e.argv[2] === 'look') {
+      runs.push(e.argv)
+      const [code, text] = a.look ? a.look(e.argv) : [9, 'unexpected']
       if (text) yield { stream: 'stdout', text }
       return { value: { code, signal: null } }
     }
@@ -294,7 +301,7 @@ test('/skin type on runs the tool\'s type verb through the helper and shows its 
   await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
   const t = (await $.command.run(cmd('type on'))).text ?? ''
   expect(tool(w.runs).at(-1)!.slice(-2)).toEqual(['type', 'on'])
-  expect(t.split('\n')[0]).toMatch(/^Type on: bold project headers/)
+  expect(t.split('\n')[0]).toMatch(/^Type on: project headers with activity colours/)
   expect(t).not.toMatch(/PORT_STATE|RESULT/)
   expect(w.spawns).toHaveLength(0)
 })
@@ -640,4 +647,278 @@ describe('release switch (tick-only release)', () => {
     expect(argumentHintOf(false)).not.toContain('one-click')
     expect(argumentHintOf(true)).toContain('--one-click')
   })
+})
+
+describe('fonts (3 Nov 2026)', () => {
+  test('/skin font takes one name, off or list, and no options; the tool checks the name itself', () => {
+    expect(parse('font inter')).toEqual({ kind: 'font', name: 'inter' })
+    expect(parse(' FONT Zen-Maru ')).toEqual({ kind: 'font', name: 'zen-maru' })
+    expect(parse('font off')).toEqual({ kind: 'font', name: 'off' })
+    expect(parse('font list')).toEqual({ kind: 'font', name: 'list' })
+    expect(parse('font IBM Plex Sans')).toEqual({ kind: 'font', name: 'ibm-plex-sans' })
+    expect(parse('font IBM+Plex+Sans')).toEqual({ kind: 'font', name: 'ibm-plex-sans' })
+    for (const bad of ['font', 'font ../x', 'font a.css', 'font inter --tick', 'font --one-click inter']) expect(parse(bad).kind).toBe('bad')
+    expect((parse('font a.css') as { why: string }).why).toContain('inter-tight, literata, plex')
+  })
+  test('release.json decides fonts: absent keeps them, present needs "font": true', () => {
+    expect(fontsOf(null)).toBe(true)
+    expect(fontsOf('{ "oneClick": false }')).toBe(false)
+    expect(fontsOf('not json')).toBe(false)
+    expect(fontsOf('{ "oneClick": false, "font": true }')).toBe(true)
+    expect(argumentHintOf(false, true)).toContain('font <name>|off|list')
+    expect(argumentHintOf(false, false)).not.toContain('font')
+  })
+  test('the list names the font commands only where fonts are shipped; about explains them and the menu override', () => {
+    const presets = [{ name: 'nord', mode: 'auto' as const }]
+    expect(listText(presets, 'dark', true)).toContain('/skin font list')
+    expect(listText(presets, 'dark')).not.toContain('/skin font')
+    expect(ABOUT).toContain('/skin font <name>')
+    expect(ABOUT).toContain("Claude's own font menu has no effect")
+    expect(ABOUT.includes(String.fromCharCode(8212))).toBe(false)
+  })
+  test('typeahead after font offers font names, off and list where fonts are shipped, never skin names', () => {
+    const at = (draft: string, fonts = true) => skinSuggestions(draft, draft.lastIndexOf(' ') + 1, draft.length, ['nord', 'noir'], false, fonts).map(r => r.text)
+    expect(at('/skin font n')).toEqual(['noto', 'inter-tight', 'zen-maru'])
+    expect(at('/skin font l')).toEqual(['literata', 'lato', 'list', 'plex'])
+    expect(at('/skin font o')).toEqual(['off', 'noto', 'roboto', 'lato'])
+    expect(at('/skin font n', false)).toEqual([])
+    expect(at('/skin font noto')).toEqual([])
+    expect(FONT_NAMES.length).toBe(7)
+  })
+  test('the restore line after a tick always shows, whether it worked, partly worked or got no answer', () => {
+    const base = 'sampled colour checks: 5 of 5 passed (0 unknown)\ndebugger: confirmed closed\nhelper: active until Claude quits\nPORT_STATE: closed\nRESULT: ok\n'
+    for (const r of ['restore: brought back the project headers and the font inter (no second tick; as the colour helper reports)', 'restore: could not bring back the font inter (no answer yet; it may still finish, /skin check shows what is on): the skin itself is on. Run /skin type on or /skin font <name> to try again.']) {
+      expect(summary('nord', 0, `${r}\n${base}`, '')).toContain(r)
+    }
+  })
+})
+
+
+describe('the one-line command (3 Nov 2026)', () => {
+  test('a skin with parts, or font and type together, is one line; single parts keep their own kinds', () => {
+    expect(parse('dracula font plex type on')).toEqual({ kind: 'set', skin: 'dracula', words: ['dracula', 'font', 'plex', 'type', 'on'], font: 'plex', type: true, via: 'auto' })
+    expect(parse('dracula type off font IBM Plex Sans')).toEqual({ kind: 'set', skin: 'dracula', words: ['dracula', 'type', 'off', 'font', 'ibm', 'plex', 'sans'], font: 'ibm-plex-sans', type: false, via: 'auto' })
+    expect(parse('font off type off')).toEqual({ kind: 'set', skin: null, words: ['font', 'off', 'type', 'off'], font: 'off', type: false, via: 'auto' })
+    expect(parse('nord type on --tick')).toEqual({ kind: 'set', skin: 'nord', words: ['nord', 'type', 'on'], type: true, via: 'tick' })
+    expect(parse('off font off')).toEqual({ kind: 'set', skin: 'off', words: ['off', 'font', 'off'], font: 'off', via: 'auto' })
+    expect(parse('font plex')).toEqual({ kind: 'font', name: 'plex' })
+    // Sizes (3 Nov 2026): the size rides along as the font key the tool checks, in either part order and with full names.
+    expect(parse('font plex 16')).toEqual({ kind: 'font', name: 'plex-16' })
+    expect(parse('font ibm plex sans 16')).toEqual({ kind: 'font', name: 'ibm-plex-sans-16' })
+    expect(parse('dracula font plex 14')).toEqual({ kind: 'set', skin: 'dracula', words: ['dracula', 'font', 'plex', '14'], font: 'plex-14', via: 'auto' })
+    expect(parse('dracula type on font zen maru 18 --tick')).toEqual({ kind: 'set', skin: 'dracula', words: ['dracula', 'type', 'on', 'font', 'zen', 'maru', '18'], type: true, font: 'zen-maru-18', via: 'tick' })
+    expect(parse('nord font inter 13 type off')).toEqual({ kind: 'set', skin: 'nord', words: ['nord', 'font', 'inter', '13', 'type', 'off'], font: 'inter-13', type: false, via: 'auto' })
+    expect(parse('font inter-tight 17')).toEqual({ kind: 'font', name: 'inter-tight-17' })
+    // plex+16 and plex_16 are refused on every route (alone, in a line, with --tick); + and _ still join family names.
+    for (const line of ['font plex+16', 'font plex_16', 'dracula font plex+16', 'dracula font plex_16 type on', 'dracula font plex+16 --tick', 'font ibm+plex+sans+16']) {
+      const p = parse(line); expect(p.kind === 'bad' ? p.why : `not refused: ${p.kind}`).toContain('Put a space before the size')
+    }
+    expect(parse('font ibm+plex+sans 16')).toEqual({ kind: 'font', name: 'ibm-plex-sans-16' })
+    expect(parse('dracula font ibm_plex_sans --tick')).toEqual({ kind: 'set', skin: 'dracula', words: ['dracula', 'font', 'ibm_plex_sans'], font: 'ibm-plex-sans', via: 'tick' })
+    // Malformed sizes and font off with a size are passed on: the tool refuses them before anything changes.
+    expect(parse('dracula font off 14')).toEqual({ kind: 'set', skin: 'dracula', words: ['dracula', 'font', 'off', '14'], font: 'off-14', via: 'auto' })
+    expect(parse('type on')).toEqual({ kind: 'type', on: true })
+    expect(parse('dracula')).toEqual({ kind: 'apply', name: 'dracula', via: 'auto' })
+    expect(parse('off --tick')).toEqual({ kind: 'off', via: 'tick' })
+    expect(parse('remove --tick')).toEqual({ kind: 'remove', via: 'tick' })
+  })
+  test('malformed lines are refused here; the tool checks names and the rest', () => {
+    const why = (line: string) => { const p = parse(line); return p.kind === 'bad' ? p.why : `not refused: ${p.kind}` }
+    expect(why('dracula font plex font lato')).toContain('font is given twice')
+    expect(why('dracula type on type off')).toContain('type is given twice')
+    expect(why('dracula type maybe')).toContain('type takes on or off')
+    expect(why('dracula font')).toContain('font needs a name')
+    expect(why('dracula font plex banana type on x')).toContain('I did not understand x')
+    expect(why('dracula type on --one-click')).toContain('--tick only')
+    expect(why('off type on --tick')).toContain('--tick goes with a skin name')
+    expect(why('font plex type on --tick')).toContain('--tick goes with a skin name')
+    expect(why('Dra.cula type on')).toContain('letters, digits and hyphens')
+    expect(why('dracula font a.css')).toContain('Not a font name')
+  })
+  test('the tick card shows the skin, not a --want option; part: lines survive the summary', () => {
+    const base = 'sampled colour checks: 4 of 4 passed (0 unknown)\ndebugger: confirmed closed\nhelper: active until Claude quits\nPORT_STATE: closed\nRESULT: ok\n'
+    const r = 'part: font plex: done (no second tick; as the colour helper reports)'
+    expect(summary('nord', 0, `${r}\n${base}`, '')).toContain(r)
+  })
+  test('about explains the one line', () => {
+    expect(ABOUT).toContain('/skin dracula font plex type on')
+  })
+})
+
+// ---- the fonts card (4 Nov 2026) ----
+describe('fonts card helpers', () => {
+  test('/skin fonts opens the card, /skin fonts off closes it; nothing else after fonts', () => {
+    expect(parse('fonts')).toEqual({ kind: 'fonts', show: true })
+    expect(parse('FONTS off')).toEqual({ kind: 'fonts', show: false })
+    for (const bad of ['fonts on', 'fonts --tick', 'fonts off x', '--tick fonts']) expect(parse(bad).kind).toBe('bad')
+  })
+  test('the LOOK line is read strictly; anything odd is no look', () => {
+    expect(lookInfoOf('x\nLOOK: {"helper":"active","look":["chat.font.literata","rows.size.13"],"type":"on","parts":[]}\nRESULT: ok')).toEqual({ helper: 'active', look: ['chat.font.literata', 'rows.size.13'], type: 'on' })
+    expect(lookInfoOf('LOOK: {"helper":"none"}')).toEqual({ helper: 'none', look: null, type: 'unknown' })
+    expect(lookInfoOf('LOOK: {"helper":"active","look":["chat.font.<b>"]}')?.look).toBe(null)
+    expect(lookInfoOf('LOOK: not json')).toBe(null)
+    expect(lookInfoOf('no line')).toBe(null)
+  })
+  test('choices per part: fonts, sizes and only the weights the shown font has; a font pick drops a weight it lacks', () => {
+    expect(SECTIONS.map(s => s.id)).toEqual(['all', 'chat', 'rows', 'headers', 'ui'])
+    expect(fontOptions('all')[0]).toEqual({ value: 'claude', label: "Claude's own" })
+    expect(setArgs('all', { font: 'noto', size: 'claude', weight: 'claude' })).toEqual(['look', 'set', 'all', 'font=noto'])
+    expect(picksOf(['ui.font.plex', 'chat.font.literata'], 'all')).toEqual({ font: 'plex', size: 'claude', weight: 'claude' })
+    expect(sizeOptions('all').map(o => o.value)).toEqual(['claude'])
+    expect(fontOptions('chat')[0]).toEqual({ value: 'same', label: 'Same as everything else' })
+    expect(fontOptions('ui')[0]).toEqual({ value: 'claude', label: "Claude's own" })
+    expect(fontOptions('chat').length).toBe(1 + Object.keys(FONT_LABELS).length)
+    expect(sizeOptions('rows').map(o => o.value)).toEqual(['claude', '12', '13', '14', '15'])
+    expect(sizeOptions('ui').map(o => o.value)).toEqual(['claude'])
+    expect(weightOptions('chat', 'lato', 'claude').map(o => o.value)).toEqual(['claude', '300', '400'])
+    expect(weightOptions('chat', 'same', 'zen-maru').map(o => o.value)).toEqual(['claude', '300', '400', '500'], 'same as everything else follows the ui font')
+    expect(weightOptions('headers', 'same', 'claude').map(o => o.value)).toEqual(['claude', '400', '500', '600'])
+    expect(withFont('chat', { font: 'plex', size: '16', weight: '500' }, 'lato', 'claude')).toEqual({ font: 'lato', size: '16', weight: 'claude' })
+    expect(withFont('chat', { font: 'plex', size: '16', weight: '300' }, 'lato', 'claude')).toEqual({ font: 'lato', size: '16', weight: '300' })
+    expect(FONT_WEIGHTS.lato).toEqual([300, 400])
+  })
+  test('the look -> choices, the argv for one part, and the summary in the tool\'s words', () => {
+    const look = ['ui.font.plex', 'chat.font.literata', 'chat.size.16', 'chat.weight.300', 'headers.weight.600']
+    expect(picksOf(look, 'chat')).toEqual({ font: 'literata', size: '16', weight: '300' })
+    expect(picksOf(look, 'rows')).toEqual(defaultPicks('rows'))
+    expect(allPicks(look).ui).toEqual({ font: 'plex', size: 'claude', weight: 'claude' })
+    expect(setArgs('chat', { font: 'literata', size: '16', weight: '300' })).toEqual(['look', 'set', 'chat', 'font=literata', 'size=16', 'weight=300'])
+    expect(setArgs('ui', { font: 'plex', size: 'claude', weight: 'claude' })).toEqual(['look', 'set', 'ui', 'font=plex'])
+    expect(lookSummary(look)).toEqual(['Chat text: Literata, 16px, light 300', 'Project headers: the same font as everything else, semibold 600', 'Everything else: IBM Plex Sans'])
+    expect(resultLineOf('LOOK: {}\nChat text done. Fonts now: x.\n(as the colour helper reports; no debugger checked it)\nPORT_STATE: closed\nRESULT: ok', '', 0)).toBe('Chat text done. Fonts now: x.')
+    expect(resultLineOf('', 'boom\n', 1)).toBe('boom')
+    expect(noLookText('none')).toMatch(/--tick/)
+    expect(noLookText('old')).toMatch(/Quit and reopen Claude/)
+  })
+})
+
+const FONTS_WORLD = (on: On, a: Answers) => {
+  const w = world(on, a)
+  on('fs.exists', ($, e) => ({ value: false })) // no release.json: the owner's copy, fonts shipped
+  return w
+}
+const LOOK_SHOW = 'LOOK: {"helper":"active","look":["chat.size.16"],"type":"on","parts":[]}\nfonts: Chat text: the same font as everything else, 16px\ndebugger: not used (switching needs no port)\nPORT_STATE: closed\nRESULT: ok'
+test('/skin fonts draws the card with four dropdowns; picks stay in the card until Apply, which sends one part through the helper', OPTS, async ($, on) => {
+  const sent: (readonly string[])[] = []
+  const w = FONTS_WORLD(on, { look: (argv) => {
+    sent.push(argv.slice(2))
+    if (argv[3] === 'show') return [0, LOOK_SHOW]
+    return [0, 'LOOK: {"helper":"active","look":["chat.size.16","rows.font.roboto","rows.size.13"],"type":"on","parts":[]}\nSidebar rows done. Fonts now: Chat text: the same font as everything else, 16px; Sidebar rows: Roboto, 13px.\n(as the colour helper reports; no debugger checked it)\ndebugger: not used (switching needs no port)\nPORT_STATE: closed\nRESULT: ok']
+  } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const r = await $.command.run(cmd('fonts'))
+  expect(r.text).toMatch(/The fonts card is open above the message box/)
+  expect(r.text).toMatch(/All parts sets one font everywhere/) // the help lives in the reply, not the card
+  expect(sent).toEqual([['look', 'show']])
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  // One slim row: a short label, no title, no help paragraph, no summary list.
+  expect(await ui.find({ type: 'Text', text: 'Fonts' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Reskin · fonts|Weight changes|Chat text: / })).toBeUndefined()
+  // The card opens on All parts: part and font only.
+  expect(await ui.findAll({ type: 'Select' })).toHaveLength(2)
+  await ui.select({ key: 'skin-fonts-section', value: 'chat' })
+  expect(await ui.findAll({ type: 'Select' })).toHaveLength(4)
+  await ui.select({ key: 'skin-fonts-section', value: 'rows' })
+  await ui.select({ key: 'skin-fonts-font', value: 'roboto' })
+  await ui.select({ key: 'skin-fonts-size', value: '13' })
+  expect(sent).toHaveLength(1) // picking sends nothing
+  await ui.press({ key: 'skin-fonts-apply' })
+  expect(sent.at(-1)).toEqual(['look', 'set', 'rows', 'font=roboto', 'size=13', 'weight=claude'])
+  await ui.unmount()
+  const after = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await after.find({ type: 'Text', text: 'Applied' })).toBeDefined()
+  // Claude's own puts the shown part back: font same, Claude's size and weight.
+  await after.press({ key: 'skin-fonts-reset' })
+  expect(sent.at(-1)).toEqual(['look', 'set', 'rows', 'font=same', 'size=claude', 'weight=claude'])
+  await after.press({ key: 'skin-fonts-close' })
+  await after.unmount()
+  const gone = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await gone.find({ type: 'Text', text: 'Fonts' })).toBeUndefined()
+  await gone.unmount()
+  expect(w.spawns).toHaveLength(0) // never a tick
+})
+
+test('/skin fonts with no colour helper says how to start one and offers no Apply; everything else keeps a font only', OPTS, async ($, on) => {
+  FONTS_WORLD(on, { look: () => [5, 'LOOK: {"helper":"none"}\nNo colour helper is running in this Claude (no helper session), so nothing was changed.\nPORT_STATE: closed\nRESULT: refused'] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const r = await $.command.run(cmd('fonts'))
+  expect(r.text).toBe(noLookText('none'))
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await ui.find({ type: 'Text', text: noLookText('none') })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: 'skin-fonts-apply' } as never)).toBeUndefined()
+  expect(await ui.findAll({ type: 'Select' })).toHaveLength(0)
+  await ui.unmount()
+  expect((await $.command.run(cmd('fonts off'))).text).toBe('Fonts card closed.')
+})
+
+test('two Apply presses at once start one tool run; the card is never left busy', OPTS, async ($, on) => {
+  const sent: (readonly string[])[] = []
+  FONTS_WORLD(on, { look: (argv) => { sent.push(argv.slice(2)); return [0, argv[3] === 'show' ? LOOK_SHOW : 'LOOK: {"helper":"active","look":["chat.size.16"],"type":"on","parts":[]}\nChat text done.\nPORT_STATE: closed\nRESULT: ok'] } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('fonts'))
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await Promise.all([ui.press({ key: 'skin-fonts-apply' }), ui.press({ key: 'skin-fonts-apply' })])
+  await ui.unmount()
+  expect(sent.filter(a => a[1] === 'set')).toHaveLength(1)
+  // A /skin run while nothing runs is not blocked by a stuck guard.
+  expect((await $.command.run(cmd('fonts'))).text).toMatch(/fonts card is open/)
+  const after = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await after.find({ type: 'Button', text: 'Apply' } as never)).toBeDefined()
+  await after.unmount()
+})
+
+test('All parts sets one font for the whole app in one Apply, and shows what the helper proved for every part', OPTS, async ($, on) => {
+  const sent: (readonly string[])[] = []
+  FONTS_WORLD(on, { look: (argv) => {
+    sent.push(argv.slice(2))
+    if (argv[3] === 'show') return [0, 'LOOK: {"helper":"active","look":["chat.font.literata","chat.size.16","rows.font.roboto"],"type":"on","parts":[]}\nRESULT: ok']
+    return [0, 'LOOK: {"helper":"active","look":["ui.font.noto","chat.size.16"],"type":"on","parts":[]}\nAll parts done. Fonts now: x.\nPORT_STATE: closed\nRESULT: ok']
+  } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('fonts'))
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.select({ key: 'skin-fonts-font', value: 'noto' })
+  await ui.press({ key: 'skin-fonts-apply' })
+  expect(sent.at(-1)).toEqual(['look', 'set', 'all', 'font=noto'])
+  await ui.unmount()
+  const after = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await after.find({ type: 'Text', text: 'Applied' })).toBeDefined()
+  await after.select({ key: 'skin-fonts-section', value: 'rows' })
+  await after.press({ key: 'skin-fonts-apply' })
+  expect(sent.at(-1)).toEqual(['look', 'set', 'rows', 'font=same', 'size=claude', 'weight=claude'], 'rows now shows the proved state: its own font is gone')
+  await after.unmount()
+})
+
+test('the card status is a word when it worked and one short reason when it did not', () => {
+  expect(shortStatus('ok', 'Chat text done. Fonts now: a long list.', false)).toBe('Applied')
+  expect(shortStatus('ok', 'x', true)).toBe('Reset')
+  expect(shortStatus('ok', 'Chat text sent, but what is on now is not proven (something else changed the fonts meanwhile): run /skin check, or open /skin fonts again.', false, false)).toMatch(/not proven/)
+  expect(shortStatus('refused', 'Lato has no weight 500 (it has 300, 400). Nothing was changed.', false)).toBe('Lato has no weight 500 (it has 300, 400).')
+  expect(shortStatus('failed', 'x'.repeat(300), false).length).toBe(118)
+})
+
+// An opener another band mod draws (the owner's usage-line hosts one): pressing it opens the card, once, and never resets it.
+const OPENER: Plugin = { name: 'bar-host', register: (on) => {
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e) => { const { Button } = $.ui.resolve(e); return Button({ key: 'skin-fonts-open', label: 'Fonts', plain: true, dimColor: true, onPress: () => {} }) })
+} }
+test('a Fonts button in another mod opens the card at once; a second press keeps the open card; closing gives the way back', { ...OPTS, plugins: [OPENER] }, async ($, on) => {
+  const sent: (readonly string[])[] = []
+  const w = FONTS_WORLD(on, { look: (argv) => { sent.push(argv.slice(2)); return [0, LOOK_SHOW] } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const host = await $.ui.mount({ plugin: 'bar-host', surface: 'desktop', ...BAND })
+  await host.press({ key: 'skin-fonts-open' })
+  await host.unmount()
+  expect(sent).toEqual([['look', 'show']])
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await ui.find({ type: 'Text', text: 'Fonts' })).toBeDefined()
+  await ui.select({ key: 'skin-fonts-font', value: 'noto' })
+  await ui.unmount()
+  const host2 = await $.ui.mount({ plugin: 'bar-host', surface: 'desktop', ...BAND })
+  await host2.press({ key: 'skin-fonts-open' })
+  await host2.unmount()
+  expect(sent).toHaveLength(1) // already open: no second run
+  const again = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await again.press({ key: 'skin-fonts-close' })
+  await again.unmount()
+  expect(w.toasts.some(t => /\/skin fonts brings them back/.test(t))).toBe(true)
 })

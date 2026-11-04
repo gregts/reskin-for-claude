@@ -16,7 +16,7 @@ after a Claude update. Read [SECURITY.md](SECURITY.md) before the first run: the
 your Mac for a moment. Full notice: [NOTICE.md](NOTICE.md).
 
 Reskin sends nothing off this Mac and does not touch your chats. Undo any time: `/skin off` (colours), `/skin type off`
-(bold headers), `/skin remove` (both), or quit Claude.
+(project headers), `/skin remove` (both), or quit Claude.
 
 AI agents: read [`skin/skin-tool/AGENTS.md`](skin/skin-tool/AGENTS.md) before you run anything, and ask the user before
 every `tick`.
@@ -83,28 +83,54 @@ second loses its `/skin` (if Reskin is the one that loses, it shows a status lin
    needs one click.
 
 Other commands: `/skin status`, `/skin check` (is the skin still showing its own colours), `/skin remove` (takes off the
-colours, the bold headers and the helper), `/skin type on` / `/skin type off` (below), `/skin log` (the last five runs),
-`/skin about`.
+colours, the project headers, the fonts and the helper), `/skin type on` / `/skin type off` and `/skin fonts` (below),
+`/skin log` (the last five runs), `/skin about`.
 
-### Bold project headers (optional, off until you turn it on)
+### Project headers with activity colours (optional, off until you turn it on)
 
-`/skin type on` sets the Code tab sidebar's project headers to 14px at weight 600, in the main text colour. The
-current chat's project header uses the accent colour while that chat's row is shown inside the project. The shared
-sidebar row text size becomes 13px. The sheet uses only colours the skin (or Claude) already has, and is designed for
+`/skin type on` sets the Code tab sidebar's project headers to 14px. Quiet projects use the main text colour. A
+project with a session that is running, waiting for you or unread uses the skin's accent colour, a little heavier,
+whether the project is folded or open. The project holding the chat you are in also uses the accent, with a thin
+accent stripe at the left of its header. The shared sidebar row text size becomes 13px. The sheet uses only colours the skin (or Claude) already has, and is designed for
 light and dark mode, including with the colours turned off.
 
 - It needs the colour helper, so apply a skin first (one click); after that, `type on` and `type off` need no click.
-- `/skin off` leaves the bold headers on; `/skin type off` takes them off; `/skin remove` takes off both.
-- The highlight shows while the current chat's project is open; collapse that project and its header goes back to the
-  main text colour until you open it again.
+- `/skin off` leaves the project headers on; `/skin type off` takes them off; `/skin remove` takes off both.
+- Folded projects keep their colours: Claude keeps a folded project's sessions in the page, just hidden.
 - The session-name size is a shared sidebar size, so a few other small sidebar texts become 13px too.
 - After Claude quits, `/skin status` reminds you; turn it on again with `/skin type on` after the next skin.
 - `/skin type off` may reload Claude pages if it cannot confirm that the type sheet was removed. The colour skin is kept.
 - Copies of Reskin without the type sheet say "Type is not available" and change nothing.
 
+### Fonts (optional, off until you choose one)
+
+`/skin fonts` opens a slim row above the message box: pick a part of the app, a font, a size and a weight, then Apply.
+Reset on one part clears the picker's choices for that part: its font goes back to whatever Everything else uses
+(Claude's own unless you chose a font there), and its size and weight go back to what they were without the picker.
+Reset on All parts clears every part's own font and Everything else's font, and keeps each part's size and weight;
+`/skin font off` clears every picker choice. Neither touches the project headers (`/skin type on` keeps its 14px
+headers and 13px session names until `/skin type off`). The parts are All parts (one font everywhere), Chat text (replies and the
+message box), Sidebar rows (session names and other sidebar row text), Project headers and Everything else (menus,
+buttons, settings). Typed commands work too: `/skin font plex 16` (a font for everything, chat text at 16px),
+`/skin font off`, `/skin font list` (the fonts, whether each is installed, where to download it).
+
+- Seven free fonts (SIL Open Font License): Inter Tight, Literata, IBM Plex Sans, Noto Sans, Roboto, Lato and Zen Maru
+  Gothic. Reskin ships names only, never font files: install a font first (`/skin font list` has the links); Reskin
+  checks that it is installed before it uses it.
+- Sizes: chat text 12 to 16 px, sidebar rows 12 to 15 px, project headers 12 to 16 px. Weights: light 300 to semibold
+  600, only where the font has them. Bold stays bold. Code keeps its own font; code and some icons may follow a weight.
+- It needs the colour helper, so apply a skin first (one click); after that, fonts need no click.
+- While a Reskin font or size is on, Claude's own font menu and Transcript text size have no effect on that text.
+- `/skin check` says, per part, whether the font, size and weight on screen match. `/skin font off` or `/skin remove`
+  takes the fonts off; `/skin off` keeps them.
+- After updating Reskin, quit and reopen Claude once (the helper inside Claude changed).
+- Closing the row only hides it: the fonts, sizes and weights you applied stay on (`/skin font off` takes them off);
+  `/skin fonts` brings the row back. Another mod that draws a band can offer an opener:
+  a `Button` keyed `skin-fonts-open` (Reskin answers its press and opens the row; the other mod needs no Reskin state).
+
 The desktop app does not show a typeahead list of skin names after `/skin`. Use `/skin list` instead.
 
-After updating Reskin, quit and reopen Claude, apply a skin again, then run `/skin type on` if you want the bold
+After updating Reskin, quit and reopen Claude, apply a skin again, then run `/skin type on` if you want the project
 headers. Do this even if Reskin does not ask you to restart.
 
 After a Claude update, run `/skin check` once: it tells you whether the skin still paints everything it should.
@@ -136,9 +162,11 @@ the helper (like `/skin remove`), so after it the next skin needs `/skin <name>`
 - It never patches Claude's files and never changes Claude's settings, including Appearance.
 - It never clicks the Developer menu item by itself and never applies a skin at login or when Claude restarts.
 - It never sends anything off this Mac: its only connections are to Claude on 127.0.0.1.
-- It applies only its own 16 colour skins and one optional type sheet. Skins change colours only. The type sheet sets
-  project headers to 14px at weight 600, in the main text colour or the accent colour, and sets the shared sidebar row
-  text size to 13px, which can affect session names and other sidebar text. Nothing is hidden or renamed.
+- It applies only its own 16 colour skins, one optional type sheet and optional fonts. Skins change colours only. The type sheet sets
+  project headers to 14px at weight 400 or 500, in the main text colour or the accent colour, draws one thin accent
+  stripe beside the open chat's project, and sets the shared sidebar row text size to 13px, which can affect session
+  names and other sidebar text. Fonts set the family, size and weight of chosen parts, from fixed tables of seven
+  fonts, sizes and weights; no font file is loaded. Nothing is hidden or renamed.
 - It never takes screenshots in normal use.
 
 ## Remove it completely
@@ -171,6 +199,7 @@ earlier builds; they do not establish type compatibility. Type checks are listed
 
 | Claude desktop | Mac | macOS | Chrome | Node | What ran | Result |
 |---|---|---|---|---|---|---|
+| 4.16336.0 | MacBook Pro 14-inch, M4 Pro | 27.2 | not running | 26.10.0 | a development copy of this release (not from this repo): `tick` with type on, the `/skin fonts` row (all parts set: chat text, sidebar rows, project headers, everything else), `check` in dark with every font, size and weight line matching | passed |
 | 4.4212.0 | MacBook Pro 14-inch, M4 Pro | 27.2 | installed, not running | 26.10.0 | the 1.1.0 build (from a development copy, not from this repo): `tick`, `check` in light; type: `/skin type on` and `/skin type off`, bold headers seen by eye with Dracula and with no skin (no skin in dark and light), `type: on when last set` after a restart | passed |
 | 4.29.0 | MacBook Pro 14-inch, M4 Pro | 27.2 | installed | 26.10.0 | the public 1.0.0 install from this repo: `tick`, `check` in dark and light | passed |
 | 3.6556.1 | MacBook Pro 14-inch, M4 Pro | 27.0.1 | installed, not running (Chrome started by the click) | 26.10.0 | an earlier build (from a development copy, not from this repo): `tick`, `check` in dark and light | passed |
@@ -193,8 +222,8 @@ breaks a skin, and `skin/skin-tool/tested-versions.json` lists the Claude versio
 | The helper ends when Claude quits | `/skin status` offers to reapply the last skin, which needs one click | `liveSession` in `skin-lib.mjs` | `two-choice.test.mjs`: "client: liveSession is active only for the very Claude process ..." |
 | Any program running as you can command the helper or fake its answers | `/skin` talks to the helper through files in your user folder, so another program running as you could change them; quitting Claude always ends the helper | colour helper in `skin.mjs` | `security.test.mjs`: "a removal through the helper is reported ..." |
 | Without Chrome, Claude is frozen and the debugger stays open until you click OK on its message | The card tells you to click OK; no timer can run sooner. The skin step waits for Claude (`PATIENT_MS` in `skin.mjs`) | `tickRun` in `skin-auto.mjs` | `shorter-door.test.mjs` |
-| The bold headers rely on Claude's sidebar structure, which can change | `/skin check` reports matching header counts when available. No matches may mean there are no project headers or Claude's sidebar changed. The check does not verify the headers' actual size, weight or colour; look at them. `/skin type off` removes the type changes | `typeLine` in `skin-lib.mjs` | `type-slot.test.mjs`: "typeLine: the check reports what the pages show" |
-| The current-project highlight needs that project open | The header shows the main text colour while the project is collapsed | `type/sidebar-headers.css` | none (seen live) |
+| The project headers rely on Claude's sidebar structure, which can change | `/skin check` reports matching header counts when available. No matches may mean there are no project headers or Claude's sidebar changed. The check does not verify the headers' actual size, weight or colour; look at them. `/skin type off` removes the type changes | `typeLine` in `skin-lib.mjs` | `type-slot.test.mjs`: "typeLine: the check reports what the pages show" |
+| The current-project highlight (accent and left stripe) needs the open chat's row in the page | Claude keeps a folded project's rows in the page, so it normally stays; if Claude ever stops doing that, the header shows the main text colour until the project is opened | `type/sidebar-headers.css` | none (seen live) |
 | The Developer menu item is found by its English name | If it cannot be found to clear the tick, the run says so | `UNTICK` in `skin.mjs` | `security.test.mjs`: "UNTICK clears the tick without clicking ..." |
 | If the debugger cannot be confirmed closed, Reskin stops | Quit and reopen Claude | guardian in `skin-lib.mjs` | `skin-tool.test.mjs`: "the guardian: closes on unknown or open, ..." |
 | Running `skin.mjs` directly has no guardian and no run lock | For developers only; use `skin-auto.mjs` or `/skin` | `skin.mjs` | none |
