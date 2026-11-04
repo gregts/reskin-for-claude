@@ -18,14 +18,14 @@ even if Reskin does not ask for a restart.
   user account, can run code inside Claude (the debugger has no password; other machines cannot reach it). Reskin keeps it open as briefly as it can (in `tick` mode it is ready and waiting before the
   user clicks, and closes the port right after applying; tick-mode reports print the measured time). Once Reskin has
   confirmed the port belongs to Claude it sets a timer inside Claude, which closes the port after 8 s (a tick-mode
-  preset apply) or 22 s (everything else) even if Reskin dies; before that timer is set, only the backup guardians
+  preset apply, or a no-skin start) or 22 s (everything else) even if Reskin dies; before that timer is set, only the backup guardians
   close it. In `tick` mode guardian A, started just before the prompt, looks about 90 s after it started and stops at
   the first look that finds the port closed, so a click after the 60 s window is not reliably covered: tell the user
   not to click late, and to quit and reopen Claude if they did. Guardian B starts when the run sees the port open and
   tries up to 30 times, 10 s apart (`tick`; each try can take a few seconds, so several minutes); the `one-click`
   guardian tries 6 times. On a Mac without Chrome,
   Claude is frozen until the user clicks OK on its message, so the port stays open until then: no timer can run sooner.
-- After the first apply, a small colour helper stays inside Claude until Claude quits. The debugger is closed by then.
+- After the first apply (or a no-skin `tick off`), a small colour helper stays inside Claude until Claude quits. The debugger is closed by then.
   The helper can only switch between Reskin's presets, Off, the optional type sheet (on or off), the reviewed fonts, sizes
   and weights (the font picker), or remove itself, and
   any program running as this user could ask it to. Its file checks (private folder and files, session ID, numbered requests) catch accidents and stale
@@ -42,6 +42,7 @@ even if Reskin does not ask for a restart.
 |---|---|---|
 | `switch <preset\|off\|remove>` | a running helper | asks the helper; no tick, no port, no Chrome |
 | `tick <preset\|remove>` | the user clicks the menu item once | default when there is no helper |
+| `tick off [--want-font=<name\|name-size\|off>] [--want-type=on\|off]` | the user clicks the menu item once | the no-skin tick (mod: `/skin type on --tick`, `/skin font <name> [size] --tick`, `/skin font <name> type on --tick`, `/skin fonts --tick`): starts the colour helper only, puts no skin on. Before the prompt it prints a `PLAN: {json}` line (after `Ready.`) naming every part it will set: the asked ones and the remembered headers and font. After the close the helper takes any Reskin skin off (a Claude page may reload once), a check must say "no skin on", then the parts run in order and stop at the first that does not complete (`part:` lines). Refused before any prompt when a helper of this version is already running ("no tick is needed"), old or unknown. `off` is a target for `tick` only; `tick remove` keeps its meaning |
 | `one-click <preset\|remove>` | Accessibility for this terminal | the run ticks the menu itself. Not in the public release: there `release.json` says `"oneClick": false` and the tool refuses it |
 | `type <on\|off>` | a running helper | the optional type sheet: sidebar project headers 14px; active projects (a session running, waiting or unread) in the skin's accent, the open chat's project also with an accent stripe at the left of its header row; session names 13px. No tick, no port. `switch off` keeps it; `switch remove` takes it off |
 | `font <name>[-<size 12 to 16>]\|off\|list` | a running helper | in this release (`release.json` says `"font": true`; a copy without it refuses fonts): body text, replies, message box, buttons and sidebar in one of the reviewed fonts (`list` shows them and their download links); an optional size (12 to 16 px) applies to chat text only (replies and the message box), for example `font plex-16`. Checks the font is installed first. Code and the serif titles stay Claude's; Claude's own font menu has no effect on that text while one is on. `type off` keeps the font, `font off` keeps the headers; `switch remove` takes both |
@@ -108,7 +109,8 @@ the tool's logging off for one run.
 
 ## After Claude restarts
 
-The helper is gone with Claude. `status` shows `helper: none` and may offer "Reapply <skin>?". Offer it to the user;
+The helper is gone with Claude. `status` shows `helper: none` and may offer "Reapply <skin>?" (or, when only headers or
+a font were on, "Reapply the project headers?" with `/skin type on --tick` or `/skin fonts --tick`). Offer it to the user;
 it needs one tick. Nothing is reapplied without that tick. Within the tick run that applies the skin, the remembered sidebar
 headers and font (if any) come back by themselves through the new helper, with no second tick; the run prints a
 `restore:` line saying what came back or what could not.

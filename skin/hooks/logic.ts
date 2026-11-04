@@ -16,6 +16,9 @@ export type Parsed =
   | { kind: 'type'; on: boolean }
   | { kind: 'font'; name: string }
   | { kind: 'fonts'; show: boolean }
+  // The no-skin tick (4 Nov 2026): one tick that starts the colour helper with no skin, then sets these parts
+  // (tool: tick off --want-font= --want-type=). `fonts`: open the fonts card after it worked.
+  | { kind: 'start'; font?: string; type?: boolean; fonts?: boolean }
   | { kind: 'set'; skin: string | null; words: string[]; font?: string; type?: boolean; via: Via }
   | { kind: 'about' }
   | { kind: 'log' }
@@ -40,23 +43,26 @@ export function parse(args: string, oneClick = true): Parsed {
   if ((skinFirst && keys >= 1) || keys >= 2) return parseSet(rest, skinFirst ? rest[0]! : null, via)
   // Type (2 Nov 2026, look 3 Nov): project headers with activity colours, through the colour helper.
   if (rest[0] === 'type') {
-    if (flags.length) return { kind: 'bad', why: 'type takes no options.' }
+    if (flags.length && via !== 'tick') return { kind: 'bad', why: 'type takes no options except --tick.' }
     if (rest.length !== 2 || (rest[1] !== 'on' && rest[1] !== 'off')) return { kind: 'bad', why: 'Use /skin type on or /skin type off.' }
+    if (via === 'tick') return rest[1] === 'on' ? { kind: 'start', type: true } : { kind: 'bad', why: NOTHING_OFF }
     return { kind: 'type', on: rest[1] === 'on' }
   }
   // Fonts (3 Nov 2026): a body font from the tool's reviewed list, through the colour helper. The tool checks the name.
   if (rest[0] === 'font') {
-    if (flags.length) return { kind: 'bad', why: 'font takes no options.' }
+    if (flags.length && via !== 'tick') return { kind: 'bad', why: 'font takes no options except --tick.' }
+    if (via === 'tick' && (rest[1] === 'off' || rest[1] === 'list') && rest.length === 2) return { kind: 'bad', why: rest[1] === 'off' ? NOTHING_OFF : 'font list takes no options.' }
     // The full family name works too ("IBM Plex Sans", "ibm+plex+sans"): the words are joined with dashes for the tool.
     // A size goes after a space or a dash only (plex 16, plex-16), as in the tool; plex+16 and plex_16 are refused here too.
     if (SIZE_GLUE.test(rest.slice(1).join(' '))) return { kind: 'bad', why: SIZE_GLUE_WHY }
     const name = rest.slice(1).join('-').replace(/[+_]+/g, '-')
     if (rest.length < 2 || !NAME.test(name)) return { kind: 'bad', why: `Use /skin font <name> [size 12 to 16] (${FONT_NAMES.join(', ')}), /skin font off or /skin font list.` }
-    return { kind: 'font', name }
+    return via === 'tick' ? { kind: 'start', font: name } : { kind: 'font', name }
   }
   // The fonts card (4 Nov 2026): /skin fonts opens it above the message box, /skin fonts off closes it.
   if (rest[0] === 'fonts') {
-    if (flags.length) return { kind: 'bad', why: 'fonts takes no options.' }
+    if (flags.length && via !== 'tick') return { kind: 'bad', why: 'fonts takes no options except --tick.' }
+    if (via === 'tick') return rest.length === 1 ? { kind: 'start', fonts: true } : { kind: 'bad', why: 'Use /skin fonts --tick to start the colour helper with no skin and open the fonts card.' }
     if (rest.length === 1) return { kind: 'fonts', show: true }
     if (rest.length === 2 && rest[1] === 'off') return { kind: 'fonts', show: false }
     return { kind: 'bad', why: 'Use /skin fonts to open the fonts card (/skin fonts off closes it).' }
@@ -75,13 +81,15 @@ export function parse(args: string, oneClick = true): Parsed {
 }
 
 const SIZE_GLUE = /[+_]+[0-9]+$/
+// type off --tick, font off --tick: with no helper there is nothing on to turn off (and --tick never means remove here).
+const NOTHING_OFF = 'Nothing to turn off without the colour helper: quitting and reopening Claude clears it. /skin off --tick takes a skin and the helper away.'
 const SIZE_GLUE_WHY = 'Put a space before the size, for example /skin font plex 16.'
 const SET_USAGE = 'Use: /skin <skin> font <name> type on|off (each part optional), for example /skin dracula font plex type on.'
 function parseSet(rest: string[], skin: string | null, via: Via): Parsed {
   const bad = (why: string): Parsed => ({ kind: 'bad', why })
   if (via === 'one-click') return bad('A combined line works with --tick only.')
   if (skin !== null && skin !== 'off' && !NAME.test(skin)) return bad(`A skin name has only letters, digits and hyphens. ${SET_USAGE}`)
-  if (via === 'tick' && (skin === null || skin === 'off')) return bad('--tick goes with a skin name, for example /skin dracula font plex --tick.')
+  if (via === 'tick' && skin === 'off') return bad('--tick goes with a skin name, for example /skin dracula font plex --tick (or with no skin: /skin font plex type on --tick).')
   let font: string | undefined
   let type: boolean | undefined
   let i = skin === null ? 0 : 1
@@ -104,6 +112,12 @@ function parseSet(rest: string[], skin: string | null, via: Via): Parsed {
       type = rest[i + 1] === 'on'
       i += 2
     } else return bad(`I did not understand ${rest[i]}. ${SET_USAGE}`)
+  }
+  // No skin word with --tick: the no-skin tick, carrying these parts. Only Off parts: nothing to turn on, so refused.
+  if (via === 'tick' && skin === null) {
+    if (font === 'list') return bad('font list takes no options.')
+    if ((font === undefined || font === 'off') && type !== true) return bad(NOTHING_OFF)
+    return { kind: 'start', ...(font !== undefined ? { font } : {}), ...(type !== undefined ? { type } : {}) }
   }
   return { kind: 'set', skin, words: rest, ...(font !== undefined ? { font } : {}), ...(type !== undefined ? { type } : {}), via }
 }
@@ -161,6 +175,7 @@ export function listText(presets: readonly Preset[], macMode: 'dark' | 'light' |
     ...(some('unknown') ? [`Other (mode not recognised): ${names('unknown')}`] : []),
     `${macMode === 'unknown' ? 'I could not read your Mac\'s appearance' : `Your Mac is in ${macMode} mode`}. Claude follows the Mac only when Settings > Appearance is System${some('dark') || some('light') ? '; a dark-only or light-only skin shows only while Claude looks that way' : ''}.`,
     '/skin <name> applies one: the first needs one tick of Developer > Enable Main Process Debugger, later switches need none until Claude quits. /skin off, /skin remove, /skin status, /skin check. /skin type on colours the project headers by activity. One line can set several at once, for example /skin dracula type on.',
+    `No skin wanted? /skin type on --tick${fonts ? ', /skin font <name> --tick or /skin fonts --tick' : ''} starts the colour helper with one tick and puts no skin on.`,
     ...(fonts ? ['/skin font list shows the body fonts; /skin font <name> switches to one (no tick), /skin font off goes back to Claude\'s own. /skin fonts opens a row to choose each part\'s font, size and weight.'] : []),
     DEV_MODE,
   ].join('\n')
@@ -205,6 +220,19 @@ export function summary(name: string, exitCode: number, stdout: string, stderr: 
   return [head, detail, ...report, ...warnings, portLine].filter(Boolean).join('\n')
 }
 
+// The no-skin tick's answer (4 Nov 2026). Success only on the tool's RESULT ok: the helper started, no skin is on (as it
+// reports) and every part of the plan was done. Anything else keeps the tool's own honest lines.
+export const START_DONE = 'Colour helper started with no skin on (Claude\'s own colours). Later changes need no tick until Claude quits.'
+// The tool's own RESULT line, only when it is there: a missing one is never read as ok.
+export const startResult = (stdout: string): 'ok' | 'failed' | 'refused' | null => (/^RESULT: (ok|failed|refused)$/m.exec(stdout)?.[1] as 'ok' | 'failed' | 'refused' | undefined) ?? null
+export function startSummary(exitCode: number, stdout: string, stderr: string): string {
+  const result = startResult(stdout)
+  if (exitCode === 0 && result === 'ok') return [START_DONE, ...summary('off', 0, stdout, stderr).split('\n').filter(l => l !== 'Skin removed.')].join('\n')
+  // Anything else goes through the failure wording, even with exit code 0 (a lost or missing result line).
+  const text = summary('off', exitCode === 0 ? 1 : exitCode, stdout, stderr)
+  return text.replace(/^The skin step failed \(exit \d+\)\./, `The colour helper start did not finish (exit ${exitCode}${result === null ? ', no result line' : ''}). The helper and any part reported done may already be on.`)
+}
+
 // 15 Oct: "not showing now" must say plainly how to see the skin.
 export function hiddenHead(name: string, h: { claude: 'dark' | 'light'; needs: 'dark' | 'light' }): string {
   const Needs = h.needs === 'dark' ? 'Dark' : 'Light'
@@ -220,13 +248,36 @@ export const noHelper = (stdout: string) => /No colour helper is running/.test(s
 // The tick card's facts, read from the tool's own disclosure (the tool knows, before the click, what Claude will show:
 // a tab in the running Chrome, Chrome starting, or its "Inspector session is active" message where there is no Chrome).
 export type Where = 'chrome-running' | 'chrome-starts' | 'message'
-export function cardFacts(disclosure: string): { where: Where; helper: boolean } {
+export function cardFacts(disclosure: string): { where: Where; helper: boolean; start: boolean; plan: string } {
+  const plan = planOf(disclosure)
   return {
     where: /Inspector session is active/.test(disclosure) ? 'message'
       : /Chrome will open with|may start your Chrome/.test(disclosure) ? 'chrome-starts' : 'chrome-running',
     helper: /colour helper stays inside Claude/.test(disclosure),
+    start: plan !== null || /This starts the colour helper only/.test(disclosure),
+    plan: plan ?? '',
   }
 }
+// The no-skin tick's plan (4 Nov 2026): the tool prints one `PLAN: {json}` line after `Ready.` and before READY_TO_TICK.
+// Returns the plan's plain words ('' when it has no parts), or null when there is no well-formed PLAN line. Read from the
+// whole captured output too (not only the disclosure), so a line split across output pieces is still found.
+export function planOf(text: string): string | null {
+  const line = text.split('\n').map(l => l.trim()).find(l => l.startsWith('PLAN: '))
+  if (line === undefined) return null
+  try {
+    const p = JSON.parse(line.slice('PLAN: '.length))
+    if (p === null || typeof p !== 'object' || p.skin !== null || !Array.isArray(p.parts) || typeof p.words !== 'string') return null
+    if (p.parts.length === 0) return ''
+    // Our own tool's words, shown as plain text: no control characters, bounded.
+    const w = p.words.replace(/[\u0000-\u001f\u007f]/g, ' ').trim()
+    return w.length > 400 ? `${w.slice(0, 397)}...` : w
+  } catch { return null }
+}
+// The no-skin tick's fixed disclosure, on the card and in the fallback line alike (design v3 [r2-2]).
+export const START_FACTS = 'No skin is put on. Any Reskin skin is taken off. A Claude page may reload once.'
+export const startFacts = (plan: string) => `${START_FACTS}${plan ? ` It also ${plan}.` : ''}`
+// The one-line fallback where no card is drawn.
+export const startStatus = (plan: string, seconds: number) => `Reskin: to start the colour helper, click Developer > Enable Main Process Debugger once (${seconds} s). ${startFacts(plan)}`
 
 // The card's text (15 Oct 2026, v4): one signed-off paragraph that runs the full width of the card (no columns). The
 // risk facts live in /skin about. The menu path is the one bold part, in the same grey as the rest.
@@ -240,11 +291,20 @@ export const CARD = {
   applying: 'Got it. Painting now. Undo any time with /skin off.',
   // After the click, when the colour helper will stay.
   applyingHelper: 'Painting now. Later skins need no click until Claude quits.',
+  // After the click on a no-skin tick: nothing is painted.
+  applyingStart: 'Starting the colour helper. Later changes need no click until Claude quits.',
+  startTitle: 'colour helper',
 } as const
 
 // The paragraph: [before the menu path, after it]. `skin` is the run's preset, or "remove" for a tick that takes the
 // skin away.
-export function cardParagraph(card: { skin: string; where: Where }): [string, string] {
+export function cardParagraph(card: { skin: string; where: Where; start?: boolean; plan?: string }): [string, string] {
+  if (card.start) {
+    const what = card.where === 'message'
+      ? ' in the top menu bar. Claude will show a message saying Inspector session is active. Click OK, and the colour helper will start within a second or two. Reskin turns the debugger off again as soon as that message is closed.'
+      : ` in the top menu bar. ${card.where === 'chrome-starts' ? 'Chrome will start with an inspect tab' : 'A Chrome inspect tab will open'} and the colour helper will start within a second or two. You can then safely close that tab. Reskin turns the debugger off again almost instantly.`
+    return ['To start the colour helper, click ', `${what} ${startFacts(card.plan ?? '')}`]
+  }
   const removing = card.skin === 'remove' || card.skin === 'off'
   const before = removing ? 'To remove the skin, click ' : 'To enable the skin, click '
   const done = removing ? 'the skin will be removed' : 'the skin will be applied automatically'
@@ -298,10 +358,11 @@ export const ABOUT = [
   'Reskin sends nothing online and changes no Claude files.',
   'Skins switch with no click until Claude quits. /skin off removes colours; /skin remove removes colours, type changes and the helper. Quitting Claude clears both.',
   '',
-  'Type is optional and starts off. Apply a skin first to start the helper, then use /skin type on. It sets project headers to 14px: quiet projects in the main text colour at weight 400; projects with a session running, waiting or unread in the accent at weight 500; the current chat\'s project also in the accent at 500 with a thin accent stripe at the left of its header. It sets the shared sidebar row text size to 13px, which can affect other sidebar text. /skin type off removes the type changes.',
+  'Type is optional and starts off. It needs the colour helper: apply a skin first, or run /skin type on --tick (no skin), then use /skin type on. It sets project headers to 14px: quiet projects in the main text colour at weight 400; projects with a session running, waiting or unread in the accent at weight 500; the current chat\'s project also in the accent at 500 with a thin accent stripe at the left of its header. It sets the shared sidebar row text size to 13px, which can affect other sidebar text. /skin type off removes the type changes.',
   'After updating Reskin, quit and reopen Claude, apply a skin again, then run /skin type on if you want the type changes.',
   '',
   'Fonts (in copies that have them) are optional too: /skin font list, /skin font <name> [size], /skin font off. A size from 12 to 16 (for example /skin font plex 14) sets chat text and the message box only; while it is on, Claude\'s own Transcript text size has no effect on them. A font changes chat text, replies, the message box, buttons and the sidebar; code and the large serif titles stay Claude\'s. Reskin checks the font is installed first. While one is on, Claude\'s own font menu has no effect on that text. After Claude restarts, the next skin brings the headers and font back by itself.',
+  'No skin needed: /skin type on --tick, /skin font <name> [size] --tick, /skin font <name> type on --tick and /skin fonts --tick (in copies with fonts) start the colour helper with one tick and put no skin on. Any Reskin skin is taken off, a Claude page may reload once, and the headers and font you had last time come back too (the card lists them before you click). If a colour helper is already running, they need no tick: use the same command without --tick. /skin off --tick still takes the skin and the helper away.',
   'One line can set several parts at once: /skin dracula font plex type on. Reskin checks the whole line first and changes nothing if any part is wrong; then it sets the skin, the font and the headers in that order, stops at the first part that does not work, and says what is on. Without a colour helper the line needs one tick, as a skin does.',
   '',
   'Every /skin run except /skin about and /skin log is saved for troubleshooting in ~/Library/Logs/Reskin/skin.log (known secret formats removed). /skin log shows the last few.',

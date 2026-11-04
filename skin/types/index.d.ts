@@ -9,6 +9,10 @@ export type TickCard = {
   where: 'chrome-running' | 'chrome-starts' | 'message'
   helper: boolean
   nudged: boolean
+  // The no-skin tick (4 Nov 2026): this run starts the colour helper with no skin; plan: the parts it also sets, in plain
+  // words from the tool's PLAN line ('' when none).
+  start?: boolean
+  plan?: string
 }
 
 // The /skin fonts card (4 Nov 2026): null when closed. look: the part ids the helper proved when last read (null =
@@ -21,6 +25,8 @@ export type FontsCard = {
   picks: { all: FontPicks; chat: FontPicks; rows: FontPicks; headers: FontPicks; ui: FontPicks }
   status: string
   busy: boolean
+  // true when a band "Fonts" opener opened it: that opener also closes it, so the card draws no ✕ of its own.
+  fromButton?: boolean
 }
 
 declare module 'claude-code' {

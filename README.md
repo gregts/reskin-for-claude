@@ -94,11 +94,13 @@ whether the project is folded or open. The project holding the chat you are in a
 accent stripe at the left of its header. The shared sidebar row text size becomes 13px. The sheet uses only colours the skin (or Claude) already has, and is designed for
 light and dark mode, including with the colours turned off.
 
-- It needs the colour helper, so apply a skin first (one click); after that, `type on` and `type off` need no click.
+- It needs the colour helper. With no helper yet, `/skin type on --tick` starts it with one click and puts no skin on
+  (Claude keeps its own colours); or apply a skin first. After that, `type on` and `type off` need no click.
 - `/skin off` leaves the project headers on; `/skin type off` takes them off; `/skin remove` takes off both.
 - Folded projects keep their colours: Claude keeps a folded project's sessions in the page, just hidden.
 - The session-name size is a shared sidebar size, so a few other small sidebar texts become 13px too.
-- After Claude quits, `/skin status` reminds you; turn it on again with `/skin type on` after the next skin.
+- After Claude quits, `/skin status` reminds you; `/skin type on --tick` brings it back with no skin, or the next skin
+  brings it back by itself.
 - `/skin type off` may reload Claude pages if it cannot confirm that the type sheet was removed. The colour skin is kept.
 - Copies of Reskin without the type sheet say "Type is not available" and change nothing.
 
@@ -119,7 +121,9 @@ buttons, settings). Typed commands work too: `/skin font plex 16` (a font for ev
   checks that it is installed before it uses it.
 - Sizes: chat text 12 to 16 px, sidebar rows 12 to 15 px, project headers 12 to 16 px. Weights: light 300 to semibold
   600, only where the font has them. Bold stays bold. Code keeps its own font; code and some icons may follow a weight.
-- It needs the colour helper, so apply a skin first (one click); after that, fonts need no click.
+- It needs the colour helper. With no helper yet, `/skin fonts --tick` (or `/skin font plex 14 --tick`, or
+  `/skin font plex type on --tick`) starts it with one click and puts no skin on; or apply a skin first. After that,
+  fonts need no click.
 - While a Reskin font or size is on, Claude's own font menu and Transcript text size have no effect on that text.
 - `/skin check` says, per part, whether the font, size and weight on screen match. `/skin font off` or `/skin remove`
   takes the fonts off; `/skin off` keeps them.
@@ -127,6 +131,17 @@ buttons, settings). Typed commands work too: `/skin font plex 16` (a font for ev
 - Closing the row only hides it: the fonts, sizes and weights you applied stay on (`/skin font off` takes them off);
   `/skin fonts` brings the row back. Another mod that draws a band can offer an opener:
   a `Button` keyed `skin-fonts-open` (Reskin answers its press and opens the row; the other mod needs no Reskin state).
+
+### Fonts and headers with no skin (one click)
+
+`/skin type on --tick`, `/skin font <name> [size] --tick`, `/skin font <name> type on --tick` and `/skin fonts --tick`
+start the colour helper with one click on **Developer > Enable Main Process Debugger** and put no skin on. Before you
+click, the card says what will happen: any Reskin skin is taken off, a Claude page may reload once, and the headers and
+fonts you had last time come back too (listed by name, size and weight). After the click the helper takes any skin off,
+checks that no skin is on, then sets each part in turn and stops at the first one that does not work (the answer says
+what is on). If a colour helper is already running, these commands say no click is needed: use them without `--tick`.
+`/skin type off --tick` and `/skin font off --tick` are refused (with no helper there is nothing to turn off), and
+`/skin off --tick` still takes the skin and the helper away.
 
 The desktop app does not show a typeahead list of skin names after `/skin`. Use `/skin list` instead.
 
@@ -148,7 +163,8 @@ node skin-auto.mjs check
 ```
 
 `--check` is read-only and lists what this Mac still needs. `tick <name>` applies the first skin after Claude starts:
-click **Developer > Enable Main Process Debugger** within 60 seconds. After that, `switch` takes a skin name, `off` or
+click **Developer > Enable Main Process Debugger** within 60 seconds. `tick off [--want-font=<name>] [--want-type=on]`
+starts the colour helper with no skin (the same click). After that, `switch` takes a skin name, `off` or
 `remove`, with no click.
 
 ### Raycast

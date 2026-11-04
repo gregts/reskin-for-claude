@@ -233,6 +233,11 @@ TICK.runLimitMs = 15_000 + TICK.windowMs + TICK.applyMs + TICK.confirmMs + TICK.
 // 210 s; the mod allows 225 s for such a run.
 TICK.wantMs = 30_000
 TICK.runLimitWantsMs = TICK.runLimitMs - TICK.restoreMs + 2 * TICK.wantMs
+// The no-skin tick (4 Nov 2026, `tick off`): after the close the helper takes any skin off (confirmMs) and then a
+// read-only check (checkMs) must prove "no skin on" before the plan's parts. 184 s / 220 s; the mod allows 200 s / 235 s.
+TICK.checkMs = 10_000
+TICK.runLimitStartMs = TICK.runLimitMs + TICK.checkMs
+TICK.runLimitStartWantsMs = TICK.runLimitWantsMs + TICK.checkMs
 
 export const NO_CHROME_GUARD_FIRST_S = Math.ceil((2 * T.syncOsaMs + T.watchMs + T.pauseMs + T.readMs + T.skinKillMs + 1_000) / 1_000)
 export async function closeMessageThenApply({ watch, read, runSkin, stopped = () => false, now = Date.now, sleep = (t) => new Promise((r) => setTimeout(r, t)), times = NO_CHROME_TIMES }) {
@@ -1189,6 +1194,96 @@ export async function restoreParts({ wants, prefs, type, font, fontShipped, caps
   if (back.length > 0) say(`brought back ${back.join(' and ')} (no second tick; as the colour helper reports)`)
   if (missing.length > 0) say(`could not bring back ${missing.map((w) => `${w} (${why[w] ?? (final === null ? 'not proven' : 'undone again after a later step failed')})`).join(', ')}: the skin itself is on. Run /skin type on or /skin font <name> to try again.`)
   return { ok: lineOk, lines, save }
+}
+
+// The no-skin tick's plan (4 Nov 2026, design v2 to v4): what `tick off` will do after the close, computed ONCE before
+// the prompt from the asked parts (--want-font, --want-type) and the remembered ones (prefs), announced on the card,
+// and then carried out exactly as announced (never re-read from prefs). Asked parts first (font, then headers), then
+// remembered ones (headers, then font). A remembered Off is nothing to do and is not in the plan; an asked Off is.
+// Returns { skin: null, headers: true|false|null, look: key|'off'|null, parts: [{ part, value, asked }], words }.
+export function buildPlan({ wants = {}, prefs = { type: false, font: null }, fontShipped = true } = {}) {
+  const parts = []
+  if (wants.font !== undefined) parts.push({ part: 'look', value: wants.font, asked: true })
+  if (wants.type !== undefined) parts.push({ part: 'headers', value: wants.type === 'on', asked: true })
+  if (wants.type === undefined && prefs.type === true) parts.push({ part: 'headers', value: true, asked: false })
+  if (wants.font === undefined && fontShipped && typeof prefs.font === 'string' && parseLook(prefs.font) !== null) parts.push({ part: 'look', value: prefs.font, asked: false })
+  const of = (k) => parts.find((p) => p.part === k)
+  return { skin: null, headers: of('headers')?.value ?? null, look: of('look')?.value ?? null, parts, words: planWords(parts) }
+}
+// One part in plain words, for the card, the fallback line and the report.
+export function planPartWords(p) {
+  const what = p.part === 'headers' ? (p.value ? 'turns on the project headers' : 'keeps the project headers off')
+    : p.value === 'off' ? "keeps Claude's own fonts"
+    : `sets the fonts (${describeLook(parseLook(p.value) ?? []).join('; ')})`
+  return p.asked ? what : `${what}, as last time`
+}
+export const planWords = (parts) => parts.map(planPartWords).join(' and ')
+// After the close: the helper's answer to `off` (design v2 [r1-5]). Only a done, ok answer to exactly that action counts.
+export function judgeOff(off) {
+  if (off === null || off === undefined || off.action !== 'off' || off.phase !== 'done') return { ok: false, why: 'the colour helper did not answer the request to take any skin off' }
+  if (off.ok !== true) return { ok: false, why: `the colour helper could not take the skin off: ${(Array.isArray(off.errors) ? off.errors : []).slice(0, 3).map(String).join('; ') || 'no reason given'}` }
+  return { ok: true, why: '' }
+}
+// Then the read-only check: "no skin on" only from a stable sample with at least one readable Claude page, every page
+// readable and none showing a Reskin marker (judgeHealth's 'none'). Zero pages, unreadable or changing pages, or any
+// other verdict: not confirmed.
+export function judgeNoSkin(seen, { tested = [], digestOf = () => '' } = {}) {
+  if (seen === null || seen === undefined || seen.action !== 'check') return { ok: false, why: 'the colour helper did not answer the check', verdict: null }
+  const j = judgeHealth(seen, { cssOf: () => null, digestOf, tested })
+  if (j.verdict !== 'none') return { ok: false, why: j.why || 'the check did not report no skin on', verdict: j.verdict, version: j.version }
+  return { ok: true, why: '', verdict: 'none', version: j.version }
+}
+// The one machine line, printed after `Ready.` and before READY_TO_TICK so it is inside what the /skin card reads.
+export const planLine = (plan) => `PLAN: ${JSON.stringify(plan)}`
+// Carries the frozen plan out through the new helper, debugger closed: one request per part, in order, STOPPING at the
+// first part that does not complete (asked or remembered alike; nothing after it is sent). Everything is judged from the
+// last proven pair, and after any unanswered request nothing earlier counts as on now (fonts and headers share one
+// sheet; a failed change's cleanup may take it off). send(action, waitMs) -> the helper's answer to that action or null.
+// Returns { ok, lines (part: lines and one summary), save (the pair to remember, or null to leave prefs alone) }.
+export async function runPlan(plan, { send, caps = [], fonts = { includes: () => false }, installed = () => 'failed', waits, prefs = { type: false, font: null } }) {
+  const parts = plan.parts.map((p) => ({
+    ...p,
+    label: p.part === 'headers' ? `type ${p.value ? 'on' : 'off'}` : p.value === 'off' ? 'font off' : (() => { const k = splitFontKey(p.value); return k !== null ? `font ${k.name}${k.size === null ? '' : ` ${k.size}px`}` : `fonts (${describeLook(parseLook(p.value) ?? []).join('; ')})` })(),
+    action: p.part === 'headers' ? `type-${p.value ? 'on' : 'off'}` : p.value === 'off' ? 'font-off' : `font-${p.value}`,
+    is: (v) => (p.part === 'headers' ? v.headers === p.value : v.font === (p.value === 'off' ? null : p.value)),
+    waitMs: p.asked ? waits.want : waits.restore,
+  }))
+  let failed = false, voided = false, last = null
+  for (const p of parts) {
+    if (failed) { p.state = 'skipped'; continue }
+    // The exact new helper must offer what a part turns on, and a font must be installed: checked before it is sent.
+    const fontOn = p.part === 'look' && p.value !== 'off'
+    const why = p.part === 'headers' && p.value && !caps.includes('type') ? 'type is not available in this colour helper'
+      : fontOn && (!caps.includes('font') || !fonts.includes(p.value)) ? 'that font is not available in this colour helper'
+      : fontOn && installed(p.value) !== 'yes' ? `could not confirm that ${fontLabel(p.value)} is installed` : null
+    if (why !== null) { p.state = 'failed'; p.ack = { errors: [why] }; failed = true; continue }
+    const ack = await send(p.action, p.waitMs)
+    if (ack === null || ack === undefined) { p.state = 'noanswer'; failed = true; voided = true; continue }
+    last = ack
+    if (ack.ok === true) p.state = 'sent'
+    else { p.state = 'failed'; p.ack = ack; failed = true }
+  }
+  const final = !voided && last !== null && slotPairOk(last.verified) ? last.verified : null
+  const lines = []
+  for (const p of parts) {
+    const j = judgeParts([p], final, p.waitMs / 1000)
+    for (const l of j.out) lines.push(`part: ${l}${l.endsWith(': done') ? ' (no second tick; as the colour helper reports)' : ''}${p.asked ? '' : ' [remembered]'}`)
+    if (j.failed) failed = true
+  }
+  const done = parts.filter((p) => p.state === 'sent' && final !== null && p.is(final))
+  const notDone = parts.filter((p) => !done.includes(p))
+  if (notDone.length > 0) {
+    const first = notDone[0]
+    lines.push(`part: the colour helper is on, but ${first.label} did not complete${voided ? '; what is on now is not proven (run /skin check)' : ''}${parts.some((p) => p.state === 'skipped') ? `. Not tried: ${parts.filter((p) => p.state === 'skipped').map((p) => p.label).join(', ')}` : ''}. No skin was put on.`)
+  }
+  // Remembered from proven results only: a part done now is saved; anything else keeps what was remembered.
+  const headersDone = done.find((p) => p.part === 'headers')
+  const lookDone = done.find((p) => p.part === 'look')
+  const save = final === null ? null : {
+    headers: headersDone ? headersDone.value : prefs.type,
+    font: lookDone ? (lookDone.value === 'off' ? null : lookDone.value) : prefs.font,
+  }
+  return { ok: !failed && notDone.length === 0, lines, save, final }
 }
 // What Claude's own font menu does while a Reskin font is on, in the words status and font print.
 export const FONT_MENU_LINE ="Claude's own font menu is overridden for body text while a Reskin font is on; code still follows Claude's setting."

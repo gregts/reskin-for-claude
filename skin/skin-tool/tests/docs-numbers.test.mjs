@@ -29,7 +29,7 @@ const EXIT_WORDS = { ok: 'ok', failed: 'failed', usage: 'usage', portNotConfirme
 test('AGENTS.md quotes the tick window and both in-Claude timers', () => {
   const t = read(path.join(tool, 'AGENTS.md'))
   assert.equal(num(t, /within (\d+) s\b/, 'tick window'), TICK_S)
-  assert.equal(num(t, /after (\d+) s \(a tick-mode preset apply\)/, 'apply timer'), ARM_S)
+  assert.equal(num(t, /after (\d+) s \(a tick-mode preset apply, or a no-skin start\)/, 'apply timer'), ARM_S)
   assert.equal(num(t, /or (\d+) s \(everything else\)/, 'fallback timer'), FALLBACK_S)
   assert.equal(num(t, /tries up to (\d+) times, \d+ s apart \(`tick`/, 'guardian B tries'), TICK.guardBTries)
   assert.equal(num(t, /tries up to \d+ times, (\d+) s apart \(`tick`/, 'guardian gap'), GUARD_GAP_S)
@@ -71,7 +71,7 @@ test('SECURITY.md quotes the tick window, timers, guardian time, lock port and s
   assert.equal(num(t, /up to \d+ times, (\d+) seconds apart/, 'guardian gap'), GUARD_GAP_S)
   assert.equal(num(t, /up to (\d+) times, \d+ seconds apart/, 'guardian B tries'), TICK.guardBTries)
   assert.match(t, /Each try can itself take a few seconds/)
-  assert.equal(num(t, /closes the port after (\d+) s \(painting a skin\)/, 'apply timer'), ARM_S)
+  assert.equal(num(t, /closes the port after (\d+) s \(painting a skin, or starting the helper with no skin\)/, 'apply timer'), ARM_S)
   assert.equal(num(t, /or (\d+) s \(anything else\)/, 'fallback timer'), FALLBACK_S)
   assert.equal(num(t, /sets the close timer \((\d+) s with `--quick`/, 'direct-run quick timer'), ARM_S)
   assert.equal(num(t, /with `--quick`, otherwise (\d+) s\)/, 'direct-run timer'), FALLBACK_S)

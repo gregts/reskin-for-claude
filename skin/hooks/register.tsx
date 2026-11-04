@@ -6,7 +6,7 @@ import { SECTIONS, allPicks, defaultPicks, fontOptions, lookInfoOf, noLookText, 
 import type { SectionId } from './fonts'
 import { APPEND_SH, BoundedText, Capture, ENTRY_MAX_BYTES, LOG_DIR, LOG_FILE, LOG_MAX_BYTES, Milestones, appearanceOf, formatEntry, logView, macModeOf, portOf } from './log'
 import type { LogRecord, PortState, Step } from './log'
-import { ABOUT, CARD, RING_SIZE, cardFacts, cardParagraph, countdownSvg, displayName, listText, modeOf, noHelper, nodeCandidates, nodeMajorOk, isSkinName, parse, skinSuggestions, oneClickOf, fontsOf, argumentHintOf, summary, toolDirCandidates } from './logic'
+import { ABOUT, CARD, RING_SIZE, cardFacts, cardParagraph, planOf, startResult, startStatus, startSummary, countdownSvg, displayName, listText, modeOf, noHelper, nodeCandidates, nodeMajorOk, isSkinName, parse, skinSuggestions, oneClickOf, fontsOf, argumentHintOf, summary, toolDirCandidates } from './logic'
 import type { Preset } from './logic'
 
 // The tick card above the prompt (null when no run waits for a click).
@@ -27,6 +27,10 @@ let cardDrawn = false
 const RUN_LIMIT_MS = 180_000
 // A tick that also carries font and type parts (a combined line): the tool allows itself 210 s (TICK.runLimitWantsMs).
 const WANTS_LIMIT_MS = 225_000
+// The no-skin tick (4 Nov 2026): after the close the helper also takes any skin off and a check proves it (the tool
+// allows itself 184 s, or 220 s with font and type parts: TICK.runLimitStartMs, TICK.runLimitStartWantsMs).
+const START_LIMIT_MS = 200_000
+const START_WANTS_LIMIT_MS = 235_000
 
 type Env = { tool: string; node: string[] }
 // exitCode is what the chat answer is built from (1 when the tool gave none, as before); the log records null then.
@@ -172,6 +176,7 @@ async function streamed($: EngineInterface, env: Env, args: string[], steps: Ste
   const stdout = new BoundedText()
   const stderr = new BoundedText()
   let cut = false
+  let starting = false // a no-skin tick (its disclosure or PLAN line said so)
   // An independent cap: the command stops waiting at limitMs even if the child goes silent, and asks the child to
   // end (the tool's own guardian still closes the port).
   let timeUp = () => {}
@@ -197,16 +202,21 @@ async function streamed($: EngineInterface, env: Env, args: string[], steps: Ste
       const seenOpen = stdout.newly('debugger port seen')
       if (ready) {
         // The card carries the tool's disclosure in short; the status line stays as a one-line fallback.
-        await update($, card, () => ({ skin, left: TICK_WINDOW_S, phase: 'wait', nudged: false, ...cardFacts(disclosure('READY_TO_TICK')) }))
+        // The no-skin tick's PLAN line is read from the whole output as well (design v3 [r2-1]), never only the disclosure.
+        const facts = cardFacts(disclosure('READY_TO_TICK'))
+        const whole = planOf(stdout.text)
+        const facts2 = whole === null ? facts : { ...facts, start: true, plan: whole }
+        starting = facts2.start
+        await update($, card, () => ({ skin, left: TICK_WINDOW_S, phase: 'wait', nudged: false, ...facts2 }))
         countdown = $.clock.every(1_000, () => { void update($, card, c => c === null || c.phase !== 'wait' ? c : { ...c, left: Math.max(0, c.left - 1) }) })
         cardDrawn = false
-        fallback = $.clock.after(1_500, () => { if (!cardDrawn) $.ui.status(`Reskin: click Developer > Enable Main Process Debugger once (${TICK_WINDOW_S} s)`) })
+        fallback = $.clock.after(1_500, () => { if (!cardDrawn) $.ui.status(facts2.start ? startStatus(facts2.plan, TICK_WINDOW_S) : `Reskin: click Developer > Enable Main Process Debugger once (${TICK_WINDOW_S} s)`) })
       }
       if (nudge) await update($, card, c => c === null ? c : { ...c, nudged: true })
       if (disclosed) $.ui.toast(disclosure('DISCLOSED'), { timeoutMs: 15_000 })
       if (seenOpen) {
         await update($, card, c => c === null ? c : { ...c, phase: 'applying' as const })
-        if (!cardDrawn) $.ui.status('Reskin: applying, stop clicking')
+        if (!cardDrawn) $.ui.status(starting ? 'Reskin: starting the colour helper, stop clicking' : 'Reskin: applying, stop clicking')
       }
     }
     return 'done'
@@ -261,7 +271,7 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1}>
           <Box flexDirection="row" justifyContent="space-between" alignItems="center">
-            <Text bold color={ACCENT}>Reskin · {displayName(c.skin)}</Text>
+            <Text bold color={ACCENT}>Reskin · {c.start ? CARD.startTitle : displayName(c.skin)}</Text>
             {waiting && (
               <Box key="skin-card-corner" flexDirection="row" gap={1} alignItems="center">
                 {ring}
@@ -271,7 +281,7 @@ export const register: Register = (on, options) => {
           </Box>
           {waiting
             ? <Text color={DIM} wrap="wrap">{before}<Text bold color={DIM}>{CARD.menu}</Text>{after}</Text>
-            : <Text>{c.helper ? CARD.applyingHelper : CARD.applying}</Text>}
+            : <Text>{c.start ? CARD.applyingStart : c.helper ? CARD.applyingHelper : CARD.applying}</Text>}
           {waiting && <Text color={DIM} wrap="wrap">{CARD.devMode}</Text>}
           {waiting && c.nudged && <Text color={ACCENT}>{c.left === 0 ? CARD.timeUp : CARD.nudge}</Text>}
           {waiting && !c.nudged && c.left === 0 && <Text color={ACCENT}>{CARD.timeUp}</Text>}
@@ -309,7 +319,7 @@ export const register: Register = (on, options) => {
     try {
       await $.command.register({
         name: 'skin',
-        description: 'Recolour the whole Claude app: /skin <name>, /skin off, /skin remove, /skin status, /skin check, /skin type on|off, /skin list, /skin log, /skin about',
+        description: 'Recolour the whole Claude app: /skin <name>, /skin off, /skin remove, /skin status, /skin check, /skin type on|off, /skin type on --tick (no skin), /skin list, /skin log, /skin about',
         argumentHint: argumentHintOf((await skinNames($), oneClickNow), fontsNow),
       })
     } catch {
@@ -407,6 +417,23 @@ async function handle($: EngineInterface, parsed: ReturnType<typeof parse>, step
       const wants = [...(parsed.font !== undefined ? [`--want-font=${parsed.font}`] : []), ...(parsed.type !== undefined ? [`--want-type=${parsed.type ? 'on' : 'off'}`] : [])]
       const r = await streamed($, env, ['tick', p.name, ...wants], steps, WANTS_LIMIT_MS)
       return said(summary(p.name, r.exitCode, r.stdout, r.stderr), last(r))
+    }
+    if (parsed.kind === 'start') {
+      // The no-skin tick (4 Nov 2026): straight to the tool, which decides everything under its run lock (an old, unknown
+      // or already running helper refuses before any prompt). No status read first, never one-click.
+      // The tool refuses a font in a copy without fonts itself; the fonts card is the mod's own, so it is gated here.
+      if (parsed.fonts && !fontsNow) return said('Fonts are not in this release.', 'refused')
+      const wants = [...(parsed.font !== undefined ? [`--want-font=${parsed.font}`] : []), ...(parsed.type !== undefined ? [`--want-type=${parsed.type ? 'on' : 'off'}`] : [])]
+      const r = await streamed($, env, ['tick', 'off', ...wants], steps, wants.length ? START_WANTS_LIMIT_MS : START_LIMIT_MS)
+      const text = startSummary(r.exitCode, r.stdout, r.stderr)
+      // Only the tool's own RESULT line counts here; a missing one is recorded as failed, never inferred from exit 0.
+      const result = startResult(r.stdout) ?? 'failed'
+      if (parsed.fonts && r.exitCode === 0 && result === 'ok') {
+        // The helper is on now: the fonts card opens, as /skin fonts would.
+        const o = await openCard($, env, steps).catch(() => ({ helper: 'unread', result: 'failed' }))
+        return said([text, o.helper === 'active' ? CARD_HELP : noLookText(o.helper)].join('\n'), result)
+      }
+      return said(text, result)
     }
     if (parsed.kind === 'list') {
       const all = await presets($, env.tool).catch(() => [] as Preset[])
@@ -555,7 +582,14 @@ function drawFonts($: EngineInterface, e: any, next: (e: any) => unknown, f: Fon
     // help or summary (the dropdowns show what is chosen; /skin fonts explains it in the chat). A short status after.
     return (
       <Box flexDirection="column">
-        <Box key="skin-fonts-row" flexDirection="row" gap={1} alignItems="center" paddingX={1} paddingTop={1}>
+        {/* Owner's screenshots (5 Nov 2026): a top gap sat the row low when shown alone, and a bottom gap left a blank
+            strip under it inside a bar. No gap above or below: the band's own box centres the row, and a bar that hosts
+            it adds its own gap. No left gap while the ✕ leads the row (its button brings its own), so the ✕ lines up
+            with the message box's +; with no ✕ (opened from a bar), "Fonts" keeps the bar's left edge. */}
+        <Box key="skin-fonts-row" flexDirection="row" gap={1} alignItems="center" paddingLeft={f.fromButton ? 1 : 0} paddingRight={1}>
+          {/* Owner's layout (4 Nov 2026, from a screenshot): Reset ends under the band's "Fonts" opener at the right end.
+              Opened by that opener, the opener closes it too (no ✕); opened by /skin fonts, a ✕ opens the row. */}
+          {!f.fromButton && <Button key="skin-fonts-close" label="✕" plain dimColor onPress={() => {}} />}
           <Text color={ACCENT}>Fonts</Text>
           {!active && <Text color={DIM} wrap="truncate-end">{noLookText(f.helper)}</Text>}
           {active && Select === undefined && <Text color={DIM} wrap="truncate-end">Use the desktop app to choose fonts.</Text>}
@@ -567,12 +601,17 @@ function drawFonts($: EngineInterface, e: any, next: (e: any) => unknown, f: Fon
             onSelect={(v: string) => set(c => ({ ...c, picks: { ...c.picks, [sec.id]: { ...c.picks[sec.id], size: v } }, status: '' }))} />}
           {active && Select !== undefined && sec.weights.length > 0 && <Select key="skin-fonts-weight" value={p.weight} options={weightOptions(sec.id, p.font, uiFont)}
             onSelect={(v: string) => set(c => ({ ...c, picks: { ...c.picks, [sec.id]: { ...c.picks[sec.id], weight: v } }, status: '' }))} />}
-          {/* Plain (no button chrome), so they stand no taller than the dropdowns (owner's look, 4 Nov 2026). */}
-          {active && Select !== undefined && <Button key="skin-fonts-apply" plain onPress={() => {}}><Text bold color={ACCENT}>{f.busy ? 'Applying…' : 'Apply'}</Text></Button>}
-          {active && Select !== undefined && <Button key="skin-fonts-reset" plain dimColor onPress={() => {}}>Reset</Button>}
           {f.status !== '' && <Text color={DIM} wrap="truncate-end">{f.status}</Text>}
           <Box flexGrow={1} />
-          <Button key="skin-fonts-close" label="✕" plain dimColor onPress={() => {}} />
+          {/* Plain (no button chrome), so they stand no taller than the dropdowns (owner's look, 4 Nov 2026). The desktop
+              draws a native button with its own side padding, so the last button ends one cell (about 9 pt) short of the
+              band's right edge (screenshot, 4 Nov 2026): both shifted right by that cell, out of the flow, desktop only. */}
+          {active && Select !== undefined && (
+            <Box flexDirection="row" gap={1} alignItems="center" position="relative" left={1}>
+              <Button key="skin-fonts-apply" plain onPress={() => {}}><Text bold color={ACCENT}>{f.busy ? 'Applying…' : 'Apply'}</Text></Button>
+              <Button key="skin-fonts-reset" plain dimColor onPress={() => {}}>Reset</Button>
+            </Box>
+          )}
         </Box>
         {below}
       </Box>
@@ -630,20 +669,26 @@ async function applyFonts($: EngineInterface, reset: boolean) {
 // as the helper proves it. Returns the helper's state and the run's result.
 const FONTS_OPENER = 'skin-fonts-open'
 let closeHintShown = false
-async function openCard($: EngineInterface, env: Env, steps: Steps): Promise<{ helper: string; result: string }> {
+async function openCard($: EngineInterface, env: Env, steps: Steps, fromButton = false): Promise<{ helper: string; result: string }> {
   const r = await quick($, env, ['look', 'show'], steps, 'fonts card (colour helper)', QUICK_LIMIT_MS)
   const info = lookInfoOf(r.stdout)
   const helper = info?.helper ?? 'unread'
   const look = info?.look ?? null
-  await update($, fontsCard, () => ({ helper, look, section: 'all', picks: allPicks(look ?? []), busy: false,
+  await update($, fontsCard, () => ({ helper, look, section: 'all', picks: allPicks(look ?? []), busy: false, fromButton,
     status: helper !== 'active' ? '' : look === null ? 'The fonts that are on now could not be proven. Choose and apply, or run /skin font off first.' : '' }))
   return { helper, result: resultOf(r.stdout, r.exitCode) }
 }
-// The opener's press: never a second run, never a reset of an open card, never a tick.
+// The opener's press toggles the card (owner, 4 Nov 2026): open when closed, closed when open. Never a tick, never a
+// second run while one is going.
 async function openFromButton($: EngineInterface) {
   if (!fontsNow) { await skinNames($).catch(() => []) } // the release switch is read with the presets
   if (!fontsNow) { $.ui.toast('Fonts are not in this release.', { timeoutMs: 5_000 }); return }
-  if ((await read($, fontsCard)) !== null) return // already open: keep its choices
+  const open = await read($, fontsCard)
+  if (open !== null) {
+    if (open.busy) { $.ui.toast('Fonts are still being applied. Press again when it is done.', { timeoutMs: 5_000 }); return }
+    await update($, fontsCard, () => null)
+    return
+  }
   if (isRunning) { $.ui.toast('A skin change is already running. Wait for it to finish.', { timeoutMs: 5_000 }); return }
   isRunning = true
   const steps: Steps = []
@@ -654,7 +699,7 @@ async function openFromButton($: EngineInterface) {
     const env = await resolveEnv($, currentOptions)
     if (typeof env === 'string') { shown = env; result = 'refused'; $.ui.toast(env, { timeoutMs: 8_000 }); return }
     toolDir = env.tool
-    const o = await openCard($, env, steps)
+    const o = await openCard($, env, steps, true)
     shown = o.helper === 'active' ? 'fonts card opened' : noLookText(o.helper)
     result = o.result
   } catch (err) {

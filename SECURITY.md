@@ -23,8 +23,8 @@ comfortable with this, do not use it.
   seconds (after 6 seconds if Reskin is already gone), then tries to close the port up to 30 times, 10 seconds apart,
   until it sees it closed. Each try can itself take a few seconds, so this can last several minutes. If Reskin dies in the instant between your click and seeing the
   port open, only the first guardian is left: quit and reopen Claude.
-- **Once Reskin has set its timer inside Claude,** that timer closes the port after 8 s (painting a skin) or 22 s
-  (anything else), even if Reskin dies. Reskin sets it right after checking that the port belongs to Claude; before
+- **Once Reskin has set its timer inside Claude,** that timer closes the port after 8 s (painting a skin, or starting
+  the helper with no skin) or 22 s (anything else), even if Reskin dies. Reskin sets it right after checking that the port belongs to Claude; before
   that, only the guardians close the port.
 - **On a Mac without Google Chrome,** Claude shows "Inspector session is active" and freezes until you click OK. Nothing
   can close the port before that click, so the open time includes your click.

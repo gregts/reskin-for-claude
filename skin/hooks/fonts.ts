@@ -87,7 +87,7 @@ export function lookSummary(look: readonly string[]): string[] {
 }
 // What the card says when it cannot change anything (no helper, an old helper, no answer).
 export function noLookText(helper: string): string {
-  return helper === 'none' ? 'Fonts need the colour helper inside Claude. Start with a skin, for example /skin dracula --tick, then open this card again.'
+  return helper === 'none' ? 'Fonts need the colour helper inside Claude. Run /skin fonts --tick (one tick, no skin put on), or start with a skin, for example /skin dracula --tick.'
     : helper === 'old' || helper === 'outdated' ? 'The colour helper inside Claude is from an older Reskin. Quit and reopen Claude, apply a skin with one tick (/skin <name> --tick), then open this card again.'
     : helper === 'noanswer' ? 'The colour helper did not answer. Close this card and try /skin fonts again in a moment.'
     : 'Could not read the fonts that are on now. Close this card and try /skin fonts again.'

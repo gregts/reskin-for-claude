@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On, Plugin, RenderElement } from 'claude-code'
 
 import { FONT_LABELS, FONT_WEIGHTS, SECTIONS, shortStatus, allPicks, defaultPicks, lookInfoOf, lookSummary, noLookText, picksOf, resultLineOf, setArgs, sizeOptions, weightOptions, withFont, fontOptions } from '../hooks/fonts'
-import { ABOUT, CARD, DEV_MODE, TIME_UP, cardFacts, cardParagraph, countdownSvg, displayName, listText, modeOf, nodeCandidates, nodeMajorOk, noHelper, parse, skinSuggestions, oneClickOf, fontsOf, FONT_NAMES, argumentHintOf, summary, toolDirCandidates } from '../hooks/logic'
+import { ABOUT, CARD, DEV_MODE, TIME_UP, START_DONE, START_FACTS, cardFacts, cardParagraph, planOf, startResult, startStatus, startSummary, countdownSvg, displayName, listText, modeOf, nodeCandidates, nodeMajorOk, noHelper, parse, skinSuggestions, oneClickOf, fontsOf, FONT_NAMES, argumentHintOf, summary, toolDirCandidates } from '../hooks/logic'
 
 const EM = String.fromCharCode(8212)
 
@@ -27,7 +27,7 @@ describe('parse', () => {
   test('type on and type off are their own command; anything else after type is refused', () => {
     expect(parse('type on')).toEqual({ kind: 'type', on: true })
     expect(parse('TYPE OFF')).toEqual({ kind: 'type', on: false })
-    for (const bad of ['type', 'type bold', 'type on off', 'type on --tick', '--tick type on']) expect(parse(bad).kind).toBe('bad')
+    for (const bad of ['type', 'type bold', 'type on off', 'type on --one-click', 'type off --tick']) expect(parse(bad).kind).toBe('bad')
   })
   test('anything path-like, odd or doubled is refused', () => {
     for (const bad of ['../x', 'a/b', '..', 'dracula.css', 'a b', '-x', 'x-', 'a--b', '$(rm)', 'a;b', 'nord --force', 'nord --tick --one-click', '--tick', 'status --tick']) {
@@ -657,7 +657,7 @@ describe('fonts (3 Nov 2026)', () => {
     expect(parse('font list')).toEqual({ kind: 'font', name: 'list' })
     expect(parse('font IBM Plex Sans')).toEqual({ kind: 'font', name: 'ibm-plex-sans' })
     expect(parse('font IBM+Plex+Sans')).toEqual({ kind: 'font', name: 'ibm-plex-sans' })
-    for (const bad of ['font', 'font ../x', 'font a.css', 'font inter --tick', 'font --one-click inter']) expect(parse(bad).kind).toBe('bad')
+    for (const bad of ['font', 'font ../x', 'font a.css', 'font off --tick', 'font list --tick', 'font --one-click inter']) expect(parse(bad).kind).toBe('bad')
     expect((parse('font a.css') as { why: string }).why).toContain('inter-tight, literata, plex')
   })
   test('release.json decides fonts: absent keeps them, present needs "font": true', () => {
@@ -731,7 +731,7 @@ describe('the one-line command (3 Nov 2026)', () => {
     expect(why('dracula font plex banana type on x')).toContain('I did not understand x')
     expect(why('dracula type on --one-click')).toContain('--tick only')
     expect(why('off type on --tick')).toContain('--tick goes with a skin name')
-    expect(why('font plex type on --tick')).toContain('--tick goes with a skin name')
+    expect(parse('font plex type on --tick')).toEqual({ kind: 'start', font: 'plex', type: true }) // the no-skin tick (4 Nov 2026)
     expect(why('Dra.cula type on')).toContain('letters, digits and hyphens')
     expect(why('dracula font a.css')).toContain('Not a font name')
   })
@@ -750,7 +750,7 @@ describe('fonts card helpers', () => {
   test('/skin fonts opens the card, /skin fonts off closes it; nothing else after fonts', () => {
     expect(parse('fonts')).toEqual({ kind: 'fonts', show: true })
     expect(parse('FONTS off')).toEqual({ kind: 'fonts', show: false })
-    for (const bad of ['fonts on', 'fonts --tick', 'fonts off x', '--tick fonts']) expect(parse(bad).kind).toBe('bad')
+    for (const bad of ['fonts on', 'fonts off --tick', 'fonts off x', 'fonts --one-click']) expect(parse(bad).kind).toBe('bad')
   })
   test('the LOOK line is read strictly; anything odd is no look', () => {
     expect(lookInfoOf('x\nLOOK: {"helper":"active","look":["chat.font.literata","rows.size.13"],"type":"on","parts":[]}\nRESULT: ok')).toEqual({ helper: 'active', look: ['chat.font.literata', 'rows.size.13'], type: 'on' })
@@ -901,7 +901,7 @@ test('the card status is a word when it worked and one short reason when it did 
 const OPENER: Plugin = { name: 'bar-host', register: (on) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e) => { const { Button } = $.ui.resolve(e); return Button({ key: 'skin-fonts-open', label: 'Fonts', plain: true, dimColor: true, onPress: () => {} }) })
 } }
-test('a Fonts button in another mod opens the card at once; a second press keeps the open card; closing gives the way back', { ...OPTS, plugins: [OPENER] }, async ($, on) => {
+test('a Fonts button in another mod toggles the card (no ✕ then); opened by /skin fonts it has a ✕ that gives the way back', { ...OPTS, plugins: [OPENER] }, async ($, on) => {
   const sent: (readonly string[])[] = []
   const w = FONTS_WORLD(on, { look: (argv) => { sent.push(argv.slice(2)); return [0, LOOK_SHOW] } })
   await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
@@ -911,14 +911,168 @@ test('a Fonts button in another mod opens the card at once; a second press keeps
   expect(sent).toEqual([['look', 'show']])
   const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
   expect(await ui.find({ type: 'Text', text: 'Fonts' })).toBeDefined()
-  await ui.select({ key: 'skin-fonts-font', value: 'noto' })
+  expect(await ui.find({ key: 'skin-fonts-close' })).toBeUndefined() // the opener closes it
   await ui.unmount()
   const host2 = await $.ui.mount({ plugin: 'bar-host', surface: 'desktop', ...BAND })
   await host2.press({ key: 'skin-fonts-open' })
   await host2.unmount()
-  expect(sent).toHaveLength(1) // already open: no second run
-  const again = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
-  await again.press({ key: 'skin-fonts-close' })
-  await again.unmount()
+  expect(sent).toHaveLength(1) // a second press closes it: no second run
+  const closed = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await closed.find({ key: 'skin-fonts-apply' })).toBeUndefined()
+  await closed.unmount()
+  expect((await $.command.run(cmd('fonts'))).text).toMatch(/fonts card is open/)
+  const typed = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await typed.find({ key: 'skin-fonts-close' })).toBeDefined()
+  await typed.press({ key: 'skin-fonts-close' })
+  await typed.unmount()
   expect(w.toasts.some(t => /\/skin fonts brings them back/.test(t))).toBe(true)
+})
+
+
+// ---- the no-skin tick (4 Nov 2026, design v2 to v4) ----
+const PLAN_LINE = 'PLAN: {"skin":null,"headers":true,"look":"plex-14","parts":[{"part":"look","value":"plex-14","asked":true},{"part":"headers","value":true,"asked":false}],"words":"sets the fonts (Everything else: IBM Plex Sans; Chat text: the same font as everything else, 14px) and turns on the project headers, as last time"}'
+const START_READY = 'Ready. Before you tick, so nothing surprises you:\n- This starts the colour helper only. No skin is put on. Any Reskin skin is taken off. A Claude page may reload once.\n- A "chrome://inspect" tab will open in Chrome. Close it.\n- After this, a small colour helper stays inside Claude until you quit Claude. It can only switch between Reskin\'s own presets, fonts and headers, turn them off, or remove itself; the next change needs no tick.\nNOW: click.\n'
+describe('no-skin tick', () => {
+  test('routes: fonts, type on, a font with a size, and font with type, each with --tick', () => {
+    expect(parse('fonts --tick')).toEqual({ kind: 'start', fonts: true })
+    expect(parse('--tick fonts')).toEqual({ kind: 'start', fonts: true })
+    expect(parse('type on --tick')).toEqual({ kind: 'start', type: true })
+    expect(parse('font plex 14 --tick')).toEqual({ kind: 'start', font: 'plex-14' })
+    expect(parse('font IBM Plex Sans --tick')).toEqual({ kind: 'start', font: 'ibm-plex-sans' })
+    expect(parse('font plex type on --tick')).toEqual({ kind: 'start', font: 'plex', type: true })
+    expect(parse('type on font plex 14 --tick')).toEqual({ kind: 'start', font: 'plex-14', type: true })
+    expect(parse('font off type on --tick')).toEqual({ kind: 'start', font: 'off', type: true })
+    expect(parse('font plex type off --tick')).toEqual({ kind: 'start', font: 'plex', type: false })
+  })
+  test('refusals: nothing to turn off, one-click, and /skin off --tick keeps meaning remove', () => {
+    for (const bad of ['type off --tick', 'font off --tick', 'font off type off --tick', 'type off font off --tick', 'fonts off --tick']) {
+      const r = parse(bad)
+      expect(r.kind, bad).toBe('bad')
+      expect(r.kind === 'bad' ? r.why : '', bad).toMatch(/Nothing to turn off|fonts --tick/)
+    }
+    for (const bad of ['type on --one-click', 'font plex --one-click', 'fonts --one-click', 'font plex type on --one-click', 'type on --tick --one-click']) expect(parse(bad).kind, bad).toBe('bad')
+    expect(parse('off --tick')).toEqual({ kind: 'off', via: 'tick' })
+    expect(parse('off type on --tick').kind).toBe('bad')
+    expect(parse('font list --tick').kind).toBe('bad')
+  })
+  test('the PLAN line: well-formed plain words only; parts none is an empty string; anything odd is no plan', () => {
+    expect(planOf(`x\n${PLAN_LINE}\nREADY_TO_TICK`)).toMatch(/^sets the fonts \(Everything else: IBM Plex Sans; Chat text: .*14px\) and turns on the project headers, as last time$/)
+    expect(planOf('PLAN: {"skin":null,"headers":null,"look":null,"parts":[],"words":""}')).toBe('')
+    expect(planOf('PLAN: {"skin":"dracula","parts":[],"words":""}')).toBe(null)
+    expect(planOf('PLAN: not json')).toBe(null)
+    expect(planOf('no plan here')).toBe(null)
+    expect(planOf(`PLAN: {"skin":null,"parts":[1],"words":"a\\u0007b"}`)).toBe('a b')
+  })
+  test('card text: start, then the fixed disclosure, then the plan; the fallback line says the same', () => {
+    for (const where of ['chrome-running', 'chrome-starts', 'message'] as const) {
+      const text = cardParagraph({ skin: 'off', where, start: true, plan: 'turns on the project headers' }).join(CARD.menu)
+      expect(text).toMatch(/^To start the colour helper, click Developer › Enable Main Process Debugger in the top menu bar\./)
+      expect(text).toContain(START_FACTS)
+      expect(text).toContain(`${START_FACTS} It also turns on the project headers.`)
+      expect(text).not.toMatch(/skin will be applied|remove the skin|skins stay on/)
+    }
+    expect(cardParagraph({ skin: 'off', where: 'message', start: true, plan: '' }).join('')).toMatch(/A Claude page may reload once\.$/)
+    expect(START_FACTS).toBe('No skin is put on. Any Reskin skin is taken off. A Claude page may reload once.')
+    expect(startStatus('turns on the project headers', 60)).toBe(`Reskin: to start the colour helper, click Developer > Enable Main Process Debugger once (60 s). ${START_FACTS} It also turns on the project headers.`)
+    expect(startStatus('', 60).endsWith('reload once.')).toBe(true)
+    expect(cardFacts(`${START_READY}${PLAN_LINE}`)).toMatchObject({ start: true, helper: true, where: 'chrome-running' })
+    expect(cardFacts(START_READY).start).toBe(true)
+    expect(cardFacts(START_READY).plan).toBe('')
+    expect(CARD.applyingStart).not.toMatch(/Paint/)
+  })
+  test('the answer: success only on RESULT ok; a failure says the helper and done parts may be on', () => {
+    const ok = 'part: type on: done (no second tick; as the colour helper reports) [remembered]\nsampled colour checks: not applicable (no skin put on); no skin on: confirmed (as the colour helper reports; no debugger checked it)\ndebugger: confirmed closed\nhelper: active until Claude quits\nPORT_STATE: closed\nRESULT: ok\n'
+    const a = startSummary(0, ok, '')
+    expect(a.split('\n')[0]).toBe(START_DONE)
+    expect(a).toContain('part: type on: done')
+    expect(a).not.toContain('Skin removed')
+    const bad = 'part: font plex: done, but not proven now: run /skin check\npart: the colour helper is on, but type on did not complete; what is on now is not proven (run /skin check). No skin was put on.\nsampled colour checks: not applicable (no skin put on); no skin on: confirmed\ndebugger: confirmed closed\nhelper: active\nPORT_STATE: closed\nRESULT: failed\n'
+    const b = startSummary(1, bad, '')
+    expect(b).not.toContain(START_DONE)
+    expect(b).toMatch(/^The colour helper start did not finish \(exit 1\)\. The helper and any part reported done may already be on\./)
+    expect(b).toContain('part: font plex: done, but not proven now')
+    expect(startSummary(0, ok.replace('RESULT: ok', 'RESULT: failed'), '')).not.toContain(START_DONE)
+    // A missing result line is never success, nor is exit 0 with refused.
+    const none = startSummary(0, '', '')
+    expect(none).not.toContain(START_DONE); expect(none).not.toContain('Skin removed')
+    expect(none).toMatch(/^The colour helper start did not finish \(exit 0, no result line\)\./)
+    expect(startSummary(0, ok.replace('RESULT: ok\n', ''), '')).not.toContain(START_DONE)
+    const refused = startSummary(0, 'A colour helper is already running, so no tick is needed.\nPORT_STATE: closed\nRESULT: refused\n', '')
+    expect(refused).not.toContain(START_DONE); expect(refused).toContain('Not started.')
+    expect([startResult('RESULT: ok'), startResult(''), startResult('RESULT: maybe')]).toEqual(['ok', null, null])
+  })
+})
+
+test('/skin type on --tick goes straight to tick off: no status or switch first, never one-click', OPTS, async ($, on) => {
+  const w = world(on, { tick: ['Ready. x\n', 'READY_TO_TICK\n', 'part: type on: done\nsampled colour checks: not applicable (no skin put on); no skin on: confirmed\ndebugger: confirmed closed\nhelper: active until Claude quits\nPORT_STATE: closed\nRESULT: ok\n'] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const r = await $.command.run(cmd('type on --tick'))
+  expect(w.spawns.map(a => a.slice(2))).toEqual([['tick', 'off', '--want-type=on']])
+  expect(tool(w.runs)).toHaveLength(0)
+  expect(r.text.split('\n')[0]).toBe(START_DONE)
+  await $.command.run(cmd('font plex 14 --tick'))
+  await $.command.run(cmd('font plex type on --tick'))
+  await $.command.run(cmd('off --tick'))
+  expect(w.spawns.map(a => a.slice(2))).toEqual([['tick', 'off', '--want-type=on'], ['tick', 'off', '--want-font=plex-14'], ['tick', 'off', '--want-font=plex', '--want-type=on'], ['tick', 'remove']])
+  expect(tool(w.runs)).toHaveLength(0)
+})
+
+test('/skin fonts --tick opens the fonts card after a good run, and not after a failed one', OPTS, async ($, on) => {
+  let code = 0
+  let noResult = false
+  on('fs.exists', () => ({ value: false })) // no release.json: the owner's copy, fonts shipped
+  mock.clock(on)
+  const w = world(on, {
+    look: () => [0, 'LOOK: {"helper":"active","look":[],"type":"off","parts":[]}\nPORT_STATE: closed\nRESULT: ok'],
+    spawn: async function* () {
+      yield { stream: 'stdout', text: 'Ready. x\nREADY_TO_TICK\n' }
+      yield { stream: 'stdout', text: `debugger: confirmed closed\nhelper: active\nPORT_STATE: closed\n${noResult ? '' : `RESULT: ${code === 0 ? 'ok' : 'failed'}\n`}` }
+      return { value: { code, signal: null } }
+    },
+  })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const r = await $.command.run(cmd('fonts --tick'))
+  expect(w.spawns.map(a => a.slice(2))).toEqual([['tick', 'off']])
+  expect(tool(w.runs).map(a => a.slice(2))).toEqual([['look', 'show']])
+  expect(r.text).toContain(START_DONE)
+  expect(r.text).toContain('The fonts card is open')
+  await $.command.run(cmd('fonts off'))
+  code = 1
+  const f = await $.command.run(cmd('fonts --tick'))
+  expect(tool(w.runs).map(a => a.slice(2))).toEqual([['look', 'show']]) // no second look: the card stays closed
+  expect(f.text).toMatch(/^The colour helper start did not finish/)
+  // Exit 0 but no RESULT line: not a success, and the card stays closed.
+  code = 0; noResult = true
+  const g = await $.command.run(cmd('fonts --tick'))
+  expect(tool(w.runs).map(a => a.slice(2))).toEqual([['look', 'show']])
+  expect(g.text).toMatch(/^The colour helper start did not finish \(exit 0, no result line\)/)
+})
+
+test('the no-skin card: title, disclosure and plan from a PLAN line split across output pieces; the fallback line too', OPTS, async ($, on) => {
+  let finish = () => {}
+  const done = new Promise<void>(r => { finish = r })
+  const w = world(on, { spawn: async function* () {
+    yield { stream: 'stdout', text: START_READY }
+    yield { stream: 'stdout', text: PLAN_LINE.slice(0, 40) }
+    yield { stream: 'stdout', text: `${PLAN_LINE.slice(40)}\nREAD` }
+    yield { stream: 'stdout', text: 'Y_TO_TICK\n' }
+    await done
+    yield { stream: 'stdout', text: '[3.00s] debugger port seen: stop clicking\n' }
+    yield { stream: 'stdout', text: 'debugger: confirmed closed\nPORT_STATE: closed\nRESULT: ok\n' }
+    return { value: { code: 0, signal: null } }
+  } })
+  const clock = mock.clock(on)
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const running = $.command.run(cmd('type on --tick'))
+  await clock.advance(0)
+  // Not drawn yet: the one-line fallback carries the same words.
+  await clock.advance(1_600)
+  expect(w.statuses).toContain(startStatus('sets the fonts (Everything else: IBM Plex Sans; Chat text: the same font as everything else, 14px) and turns on the project headers, as last time', 60))
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await ui.find({ type: 'Text', text: 'Reskin · colour helper' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^To start the colour helper, click Developer › Enable Main Process Debugger.*No skin is put on\. Any Reskin skin is taken off\. A Claude page may reload once\. It also sets the fonts \(Everything else: IBM Plex Sans.*and turns on the project headers, as last time\.$/ })).toBeDefined()
+  await ui.unmount()
+  finish()
+  await clock.advance(0)
+  await running
 })

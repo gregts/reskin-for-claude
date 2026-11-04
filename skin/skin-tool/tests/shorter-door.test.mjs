@@ -103,7 +103,7 @@ test('P3: a tick-mode preset apply samples nothing and reads no mode while the d
   assert.match(fn, /if \(mode === 'apply' && !quick\) try \{ claudeVersion/)
   assert.match(skinSrc, /const samples = offRun \|\| quick \? \[\] :/)
   assert.match(skinSrc, /\} else if \(!quick\) \{\n      \/\/ Apply must be proven too/) // proof moves after the close too
-  assert.match(autoSrc, /const quickChecks = tickMode && appliedPreset !== null/)
+  assert.match(autoSrc, /const quickChecks = tickMode && \(appliedPreset !== null \|\| helperStart\)/) // helperStart: the no-skin tick (4 Nov 2026)
   assert.match(autoSrc, /if \(skinOk && report\.deferred && \(await deferredChecks\(\)\) === 'failed'\) skinOk = false/)
   // The deferred check reuses the helper's existing command (the same preset); it adds nothing to its command list.
   assert.match(autoSrc, /sendSwitch\(nodeFs, STATE, report\.session, appliedPreset,/)

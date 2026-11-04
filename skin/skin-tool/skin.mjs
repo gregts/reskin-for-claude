@@ -2678,7 +2678,10 @@ async function main() {
   const flags = process.argv.slice(2).filter(a => a.startsWith('--'))
   const [mode, file] = process.argv.slice(2).filter(a => !a.startsWith('--'))
   const patient = flags.includes('--patient')
-  const withHelper = mode === 'apply' && !flags.includes('--no-helper')
+  // `start` (no-skin tick, 4 Nov 2026): only the colour helper is installed inside the debugger window, no stylesheet is
+  // applied there; skin-auto then asks that helper to take any skin off and to check it, with the debugger closed.
+  const startOnly = mode === 'start'
+  const withHelper = (mode === 'apply' || startOnly) && !flags.includes('--no-helper')
   // --wait-open starts this step BEFORE the prompt and waits here for the port (P2), probing it
   // fast (P1); --quick keeps only what must happen with the debugger open and leaves the colour checks to the helper (P3).
   const waitOpen = flags.includes('--wait-open')
@@ -2687,10 +2690,12 @@ async function main() {
   const unknownFlag = flags.find(f => !['--patient', '--no-helper', '--wait-open', '--quick', '--dot-census'].includes(f))
   if (unknownFlag) { console.log(`Unknown option: ${unknownFlag}`); return 2 }
   if (dots && mode !== 'batch') { console.log('--dot-census works with batch only.'); return 2 }
-  if (waitOpen && !['apply', 'remove', 'type-probe'].includes(mode)) { console.log('--wait-open works with apply, remove or type-probe only.'); return 2 }
-  if (quick && !(waitOpen && withHelper)) { console.log('--quick needs apply with the colour helper and --wait-open.'); return 2 }
-  if (!['probe', 'type-probe', 'menu-probe', 'state', 'selftest', 'reset', 'apply', 'remove', 'close', 'check-css', 'slot-offers', 'verify', 'batch', 'batch-check'].includes(mode ?? '')) {
-    console.log('Usage: node skin.mjs probe | type-probe [--wait-open] | menu-probe | state | selftest | reset | apply <file.css> [--no-helper] | remove | close | check-css <file.css> | slot-offers | verify | batch previous|off <preset.css>... | batch-check previous|off <preset.css>...')
+  if (waitOpen && !['apply', 'start', 'remove', 'type-probe'].includes(mode)) { console.log('--wait-open works with apply, start, remove or type-probe only.'); return 2 }
+  if (quick && !(waitOpen && withHelper)) { console.log('--quick needs apply or start with the colour helper and --wait-open.'); return 2 }
+  if (startOnly && !(waitOpen && quick && withHelper)) { console.log('start runs only with --wait-open --quick (from skin-auto.mjs tick off).'); return 2 }
+  if (startOnly && file !== undefined) { console.log('start takes no stylesheet.'); return 2 }
+  if (!['probe', 'type-probe', 'menu-probe', 'state', 'selftest', 'reset', 'apply', 'start', 'remove', 'close', 'check-css', 'slot-offers', 'verify', 'batch', 'batch-check'].includes(mode ?? '')) {
+    console.log('Usage: node skin.mjs probe | type-probe [--wait-open] | menu-probe | state | selftest | reset | apply <file.css> [--no-helper] | start --wait-open --quick | remove | close | check-css <file.css> | slot-offers | verify | batch previous|off <preset.css>... | batch-check previous|off <preset.css>...')
     return 2
   }
   // The public release (release.json beside this file, not saying "oneClick": true) runs only what the tick path needs;
@@ -2847,6 +2852,12 @@ async function main() {
     if (withHelper && result?.errors?.length === 0) {
       try { helper = await conn.evaluate(helperCode(presets.map, STATE_DIR, typeSheets), 3_000) } catch (e) { helper = { helper: 'none', why: e.message } }
     }
+    // start: the helper only. It carries CORE and loads and checks every offered preset, type and font sheet, as on any
+    // tick; no selected colour stylesheet is applied, so no marker reads or page reloads happen with the debugger open.
+    if (startOnly) {
+      try { helper = await conn.evaluate(helperCode(presets.map, STATE_DIR, typeSheets), 3_000) } catch (e) { helper = { helper: 'none', why: e.message } }
+      if (helper?.helper !== 'active') failure = new Error(`the colour helper did not start: ${helper?.why ?? 'no reason given'}`)
+    }
     if (mode === 'remove' || mode === 'reset') try { await conn.evaluate(STOP_HELPER, 1_500) } catch {}
     if (mode === 'remove') result = await conn.evaluate(setCode(null, false, false, false, true), 14_000)
     if (mode === 'reset') result = await conn.evaluate(setCode(null, true, false, false, true), 14_000)
@@ -2900,6 +2911,14 @@ async function main() {
     result = undefined // the report is in report.json; never print image data
   }
   // Machine lines for skin-auto (it judges the samples and prints the three-line report).
+  if (startOnly) {
+    // Machine lines for skin-auto: the off and the check come from the helper, after the close.
+    if (helper?.helper === 'active') console.log('DEFERRED_CHECKS')
+    console.log(helper?.helper === 'active' ? `HELPER: active ${helper.session}` : `HELPER: none ${helper?.why ?? 'the colour helper did not start'}`)
+    if (helper?.helper === 'active') console.log(typeOffer.why === null ? 'type switch: available (/skin type on)' : `type switch: not available (${typeOffer.why})`)
+    if (helper?.helper === 'active' && typeOffer.fontWhy) console.log(`fonts: not available (${typeOffer.fontWhy})`)
+    if (presets?.skipped.length) console.log(`NOTE: presets left out of the helper (failed the check): ${presets.skipped.join(', ')}`)
+  }
   if (mode === 'apply' && result !== undefined) {
     if (quick) console.log('DEFERRED_CHECKS') // skin-auto asks the helper for them, with the debugger closed
     else console.log(`SAMPLES: ${JSON.stringify({ mode: claudeMode, version: claudeVersion, samples: result.samples ?? [] })}`)
