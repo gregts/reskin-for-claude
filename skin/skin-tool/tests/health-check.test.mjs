@@ -66,6 +66,14 @@ test('judge: pass, with optional places off screen listed, judged per page schem
   assert.ok(!r.lines.some((l) => /^untested|^Repair/.test(l)))
 })
 
+test('judge: a raised panel that is read and shows the wrong colour fails (9 Nov 2026: the forced-clear skip hides nothing else)', () => {
+  const p = goodPage(NORD, 'dark')
+  assert.ok(p.parts.bg000 && p.parts.bg000.on, 'nord dark declares raised panels')
+  assert.equal(judgeHealth(ackOf([p]), opts).verdict, 'pass')
+  p.parts.bg000 = { on: true, v: 'rgb(9, 9, 9)' }
+  assert.equal(judgeHealth(ackOf([p]), opts).verdict, 'fail')
+})
+
 test('judge: a fully see-through page background is listed as not checked, never a miss; the chat area still decides', () => {
   const p = goodPage(NORD, 'dark')
   p.parts.bodyBg = { on: true, v: 'rgba(0, 0, 0, 0)' }
@@ -310,8 +318,10 @@ test('page: colours only in #rrggbb or rgb() form; anything else is unreadable, 
   const el = (style, classes = [], kids = {}) => ({ style, classList: classes, querySelector: (s) => kids[s] ?? null, querySelectorAll: (s) => (kids[s] ? [kids[s]] : []), matches: () => false })
   const sidebar = el({ backgroundColor: 'rgb(37, 42, 51)', '--df-hover': '#3b4252', '--df-selected': 'secret words here', '--x': '' }, [], { '[data-row]': {}, '[data-cds=Pulse]': el({ '--cds-fill-accent': 'hsl(210 50% 50%)', '--cds-fill-warning': 'url(https://x)' }) })
   const sel = { '.dframe-sidebar': sidebar, '.dframe-content': el({ backgroundColor: 'rgb(46, 52, 64)' }), '.dframe-root': el({}) }
-  const els = [el({ backgroundColor: 'rgb(1, 2, 3)' }, ['bg-surface-2', 'bg-bg-000']), el({ backgroundColor: 'rgb(59, 66, 82)' }, ['bg-surface-2', 'rounded'])]
-  const match = (s) => { for (const alt of s.split(', ')) { const [base, ...nots] = alt.split(':not('); const no = nots.map((n) => n.replace(/\)$/, '').slice(1)); const hit = els.find((e) => e.classList.includes(base.slice(1)) && no.every((n) => !e.classList.includes(n))); if (hit) return hit } return null }
+  // 9 Nov 2026: a box Claude forces clear (!bg-transparent) comes first and must be skipped for the raised-panel place.
+  const els = [el({ backgroundColor: 'rgb(1, 2, 3)' }, ['bg-surface-2', 'bg-bg-000']), el({ backgroundColor: 'rgb(59, 66, 82)' }, ['bg-surface-2', 'rounded']),
+    el({ backgroundColor: 'rgba(0, 0, 0, 0)' }, ['bg-surface-3', 'border', '!bg-transparent']), el({ backgroundColor: 'rgb(53, 52, 63)' }, ['bg-surface-3', 'flex'])]
+  const match = (s) => { for (const alt of s.split(', ')) { const [base, ...nots] = alt.split(':not('); const no = nots.map((n) => n.replace(/\)$/, '')); const hit = els.find((e) => e.classList.includes(base.slice(1)) && no.every((n) => { const sub = /^\[class\*="(.+)"\]$/.exec(n); const word = /^\[class~="(.+)"\]$/.exec(n); return sub ? !e.classList.some((c) => c.includes(sub[1])) : word ? !e.classList.includes(word[1]) : !e.classList.includes(n.slice(1)) })); if (hit) return hit } return null }
   const html = el({ '--reskin-active': '1', '--cds-surface-1': '#2e3440', '--cds-text-primary': ' #d8dee9 ', '--cds-role-accent-fill': 'red' })
   const style = (e) => ({ ...e.style, getPropertyValue: (n) => e.style[n] ?? '' })
   class OffscreenCanvas { getContext() { let f = '#000000'; return { get fillStyle() { return f }, set fillStyle(v) { f = /^hsl/.test(v) ? '#4080bf' : v === 'red' ? '#ff0000' : /^#/.test(v) ? v : f } } } }
@@ -326,6 +336,18 @@ test('page: colours only in #rrggbb or rgb() form; anything else is unreadable, 
   assert.deepEqual(out.parts.pulseWaiting, { on: true, v: null }) // a url never leaves
   assert.deepEqual(out.parts.surface2, { on: true, v: 'rgb(59, 66, 82)' }) // the element with only its own class
   assert.deepEqual(out.parts.bg200, { on: false, v: null }) // not on screen
+  assert.deepEqual(out.parts.bg000, { on: true, v: 'rgb(53, 52, 63)' }) // the box Claude forces clear is skipped (panel probe 12)
+  // Only the exact unconditional utility is skipped, in both spellings; variants and other important utilities stay
+  // eligible (9 Nov 2026), so a wrong colour on them is still read.
+  const first = (classes) => {
+    const box = [el({ backgroundColor: 'rgb(9, 9, 9)' }, ['bg-surface-3', ...classes]), el({ backgroundColor: 'rgb(53, 52, 63)' }, ['bg-surface-3'])]
+    const m = (s) => { for (const alt of s.split(', ')) { const [base, ...nots] = alt.split(':not('); const no = nots.map((n) => n.replace(/\)$/, '')); const hit = box.find((e) => e.classList.includes(base.slice(1)) && no.every((n) => { const w = /^\[class~="(.+)"\]$/.exec(n); return w ? !e.classList.includes(w[1]) : !e.classList.includes(n.slice(1)) })); if (hit) return hit } return null }
+    const c2 = createContext({ document: { readyState: 'complete', documentElement: html, body: el({}), querySelector: (s) => (s.includes(':not(') ? m(s) : null), querySelectorAll: () => [] }, getComputedStyle: style, matchMedia: () => ({ matches: true }), OffscreenCanvas })
+    return JSON.parse(JSON.stringify(runInContext(skin.HEALTH_PAGE, c2))).parts.bg000.v
+  }
+  assert.equal(first(['!bg-transparent']), 'rgb(53, 52, 63)', 'prefix spelling skipped')
+  assert.equal(first(['bg-transparent!']), 'rgb(53, 52, 63)', 'Tailwind 4 suffix spelling skipped')
+  for (const k of ['hover:!bg-transparent', 'dark:!bg-transparent', '!bg-cover', '!bg-surface-3']) assert.equal(first([k]), 'rgb(9, 9, 9)', k + ' stays eligible')
   assert.ok(!JSON.stringify(out).includes('secret') && !JSON.stringify(out).includes('https'))
 })
 

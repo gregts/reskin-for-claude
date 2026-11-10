@@ -138,6 +138,13 @@ export function nodeMajorOk(versionText: string): boolean {
 
 export type Preset = { name: string; mode: 'auto' | 'dark' | 'light' | 'unknown' }
 
+// Skins taken out of the set (5 Nov 2026: a clear message, never a quiet swap). The same names and words as the
+// tool's RETIRED_SKINS in skin-lib.mjs, which refuses them on every path too; here typed /skin <name> says so first.
+export const RETIRED_SKINS: Readonly<Record<string, { why: string; try: readonly string[] }>> = Object.freeze({ verc: { why: 'its light half looked almost the same as github and ayu', try: ['github', 'ayu'] } })
+export const retiredText = (name: string): string | null => Object.hasOwn(RETIRED_SKINS, name)
+  ? `The skin ${name} was retired (${RETIRED_SKINS[name]!.why}). Nothing was changed. Try ${RETIRED_SKINS[name]!.try.map(t => `/skin ${t}`).join(' or ')} instead.`
+  : null
+
 // CSS comments removed in one linear pass (an unclosed "/*" ends the text).
 export function stripComments(css: string): string {
   let out = ''
@@ -195,7 +202,7 @@ export function summary(name: string, exitCode: number, stdout: string, stderr: 
   const portState = find('PORT_STATE:')?.slice('PORT_STATE:'.length).trim()
   const result = find('RESULT:')?.slice('RESULT:'.length).trim()
   const portLine = portState !== undefined && portState !== 'closed' && result !== 'refused'
-    ? `PORT 9229 IS NOT CONFIRMED CLOSED (${portState}). Quit and reopen Claude, or untick Developer > Enable Main Process Debugger.`
+    ? `PORT 9229 IS NOT CONFIRMED CLOSED (${portState}). Quit and reopen Claude (Cmd+Q, then open it again); leave the Developer menu item alone.`
     : undefined
   const report = keep(lines)
   // The helper's own answers (switch, status) carry their headline as the first plain line.
@@ -209,9 +216,10 @@ export function summary(name: string, exitCode: number, stdout: string, stderr: 
     const shownReport = hidden ? report.filter(l => !/is not showing now/.test(l)) : report
     return [head, shownNote, ...shownReport.filter(l => l !== head), ...warnings, portLine].filter(Boolean).join('\n')
   }
-  // The click wait ran out with nothing applied: one short line. A port not confirmed closed still shows.
+  // The click wait ran out with nothing applied: one short line. A port not confirmed closed still shows, and so does
+  // every other warning (2.0: the tool's second look at the port can warn that the debugger opened again).
   if (lines.some(l => /^WARNING: Time is up\b/.test(l)) && lines.some(l => /^helper: unchanged/.test(l))) {
-    return [TIME_UP, portLine].filter(Boolean).join('\n')
+    return [TIME_UP, ...warnings.filter(l => !/^WARNING: Time is up\b/.test(l)), portLine].filter(Boolean).join('\n')
   }
   const noise = (l: string) => l.startsWith('RESULT:') || l.startsWith('PORT_STATE:') || l.startsWith('[') || l.startsWith('{') || l.startsWith('}') || l.startsWith('"') ||
     l.startsWith('SAMPLES:') || l.startsWith('HELPER:') || l === 'READY_TO_TICK' || l === 'DISCLOSED' || KEEP.some(re => re.test(l))
@@ -273,7 +281,7 @@ export function planOf(text: string): string | null {
     return w.length > 400 ? `${w.slice(0, 397)}...` : w
   } catch { return null }
 }
-// The no-skin tick's fixed disclosure, on the card and in the fallback line alike (design v3 [r2-2]).
+// The no-skin tick's fixed disclosure, on the card and in the fallback line alike.
 export const START_FACTS = 'No skin is put on. Any Reskin skin is taken off. A Claude page may reload once.'
 export const startFacts = (plan: string) => `${START_FACTS}${plan ? ` It also ${plan}.` : ''}`
 // The one-line fallback where no card is drawn.
@@ -316,7 +324,7 @@ export function cardParagraph(card: { skin: string; where: Where; start?: boolea
 }
 
 // The countdown ring beside the title: a circle that empties as the seconds run out, with the seconds inside, drawn
-// like usage-line's rings. Colours follow the app's light or dark look; the last 5 s turn the accent colour.
+// like a progress ring. Colours follow the app's light or dark look; the last 5 s turn the accent colour.
 export const RING_SIZE = 26
 export function countdownSvg(left: number, total: number): { source: string; alt: string } {
   const r = 10.5
@@ -393,7 +401,7 @@ export function fontsOf(releaseJson: string | null): boolean {
 export const argumentHintOf = (oneClick: boolean, fonts = false) => `[name | off | remove | status | check | type on|off${fonts ? ' | font <name>|off|list | fonts' : ''} | list | log | about] [--tick${oneClick ? ' | --one-click' : ''}]`
 
 // The font names the tool offers (FONT_STACKS in skin-tool/skin-lib.mjs), for the typeahead only: the tool checks every name.
-export const FONT_NAMES = ['inter-tight', 'literata', 'plex', 'noto', 'roboto', 'lato', 'zen-maru'] as const
+export const FONT_NAMES = ['inter-tight', 'literata', 'plex', 'noto', 'roboto', 'lato', 'zen-maru', 'commissioner', 'jetbrains'] as const
 
 export function skinSuggestions(text: string, start: number, cursor: number, skins: readonly string[], oneClick = true, fonts = false): Suggestion[] {
   const head = /^\s*\/skin\s+/i.exec(text)

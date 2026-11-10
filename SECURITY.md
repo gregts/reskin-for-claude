@@ -15,7 +15,8 @@ comfortable with this, do not use it.
 
 - **Normal run (`/skin <name>` or `tick`).** Reskin has everything prepared and is watching for the port before it asks
   you to click. As soon as the port opens it connects, paints, closes the port and reports the measured time ("seen
-  open -> confirmed closed"). On the tested Mac this was 0.1 s.
+  open -> confirmed closed"). On the tested Mac with Chrome this was 0.1 s. On a Mac without Chrome it was 1.8 s,
+  because the port stays open until you click OK on Claude's message (see below).
 - **Click only while the card asks.** You have 60 seconds. After that, do not click. If you clicked late anyway, quit
   and reopen Claude. A backup guardian, started just before the card, looks about 90 seconds after it started and closes
   the port if it finds it open, but it stops at the first look that finds the port closed, so do not rely on it.
@@ -32,12 +33,24 @@ comfortable with this, do not use it.
   `type-probe`, `menu-probe`, `state`, `selftest`, `reset` and `batch`; offline checks remain available. Once it reaches Claude it
   sets the close timer (8 s with `--quick`, otherwise 22 s); if it stops before that, the port stays open until you quit
   Claude.
-- **Switching skins later** (`/skin <name>` while the helper runs, `switch`, Raycast) opens no port at all.
+- **One more look near the end of a run.** Near the end of a click run, if enough of the run's time is left, Reskin
+  waits 5 seconds and checks the closed port once more, before any backup guardian stands down. If it finds the port
+  open again (most likely a second click on the menu item), it warns you, tries to close it and checks the result. An
+  open or unreadable result stops the run with exit code 3 ("port not confirmed closed") and the guardians stay on
+  duty. "Still closed 5 s later" in the report means the second look found the port closed; without those words, the
+  look may have been skipped or unreadable, or found the port open again (then the warnings and the final port state
+  say what happened). This is one extra
+  look, not a watch after the run ends: click the item only while a Reskin card or run asks you to.
+- **Switching skins later** (`/skin <name>` while the helper runs, `switch`, Raycast, the band) opens no port at all.
 
 ## What Reskin does to limit the risk
 
-- Checks Claude's code signature, on disk and on the running process, before anything else. If that fails, it refuses.
-- Refuses to start if port 9229 is already open, or if another Reskin run is in progress (a lock on local port 47619).
+- Before asking for the click, checks Claude's code signature on disk and on the running process. If either check
+  fails, it refuses. Later helper commands check the recorded Claude process, its start time and the helper's version;
+  they do not repeat the signature check.
+- Refuses a click run if port 9229 is already open. Two `skin-auto.mjs` runs never overlap (a lock on local port 47619),
+  a lock `skin.mjs` run directly does not take (see above); helper commands started by `/skin` wait up to 20 seconds
+  for it before refusing.
 - Before sending anything, checks that the process listening on the port is that same signed Claude, listening on
   127.0.0.1 only, and that Claude itself holds the other end of Reskin's connection.
 - Colour skins change colours only. A skin may set colour values and nothing else (no hiding, moving or relabelling), each stylesheet
@@ -49,17 +62,22 @@ comfortable with this, do not use it.
   link or font file is accepted. The header sheet itself is about 1.3 KB; the checker refuses any type slot (header
   sheet plus font parts) over 4,608 bytes. It is off until you run `/skin type on`.
 - Fonts (optional) are small fixed rule sets, each checked text for text: exact selectors written into the code, one of
-  seven font names from a fixed table (no quotes, no font file, no link), sizes and weights from fixed tables. The helper
+  nine font names from a fixed table (no quotes, no font file, no link), sizes and weights from fixed tables. The helper
   only joins these checked parts in a fixed order; the whole slot is at most 4,608 bytes (4.5 KB). Off until you choose a font.
 - Clears the menu tick when it closes the debugger and checks that it worked; if not, it tells you not to click the
   item and to quit and reopen Claude.
 - Never clicks the menu item itself in this release, never runs at login and never reapplies a skin on its own.
+- The appearance band (optional, `/skin band on`) only sends the same requests as the typed commands, through the
+  colour helper. It never opens the port; with no helper, its setup button shows the same card and waits for your click.
 - After the first skin, a colour helper stays inside Claude until it quits. It accepts only skin names, `off`, `remove`,
   a read-only check, `type-on` (only when this copy has the type sheet), `type-off` (always, as it only removes), and a
 font request naming only parts this copy gave it (`font-off` always). Its files sit in `~/Library/Application Support/claude-skin/`, a folder only you can open
   (folder 700, files 600).
 - Sends nothing off this Mac (its only connections are to Claude on 127.0.0.1) and changes no Claude files or settings.
-- Writes one log entry per run to `~/Library/Logs/Reskin/skin.log`, with known secret formats removed.
+- Normally writes one log entry per command to `~/Library/Logs/Reskin/skin.log`, with known secret formats removed.
+  `/skin about`, `/skin log` and `/skin band on|off` write none; band button actions are logged; a change that finishes
+  after `/skin` stopped waiting adds a separate completion entry. `RESKIN_LOG=off` turns the tool's own logging off for
+  a direct run.
 
 ## Accepted risks
 

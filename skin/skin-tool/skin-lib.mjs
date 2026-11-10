@@ -73,6 +73,31 @@ export function acquireLock(port = LOCK_PORT) {
   })
 }
 
+// Band (5 Nov 2026): a command queued behind another Reskin step (the band's own read, a slow change) waits for the lock
+// instead of being refused at once. The lock itself is the proof the earlier process is gone: nothing is read or sent
+// before it is held. `--lock-wait=<ms>`, a plain integer from 1 to 20000, at most once; it is taken out of the arguments.
+export const LOCK_WAIT_MAX_MS = 20_000
+export function parseLockWait(argv) {
+  const given = argv.filter((a) => a === '--lock-wait' || a.startsWith('--lock-wait='))
+  const rest = argv.filter((a) => !given.includes(a))
+  if (given.length === 0) return { ms: 0, rest }
+  if (given.length > 1) return { why: '--lock-wait is given twice.', rest }
+  const v = given[0].slice('--lock-wait='.length)
+  const ms = /^[1-9][0-9]{0,4}$/.test(v) ? Number(v) : NaN
+  if (!(ms >= 1 && ms <= LOCK_WAIT_MAX_MS)) return { why: `--lock-wait takes a whole number of milliseconds from 1 to ${LOCK_WAIT_MAX_MS}.`, rest }
+  return { ms, rest }
+}
+export async function acquireLockWaiting(ms, { acquire = acquireLock, gap = 100, now = Date.now, sleep = (t) => new Promise((r) => setTimeout(r, t)) } = {}) {
+  const start = now()
+  for (;;) {
+    const l = await acquire()
+    if (l.ok || ms <= 0) return l
+    if (!/^another skin change is running/.test(l.reason)) return l // the port is unusable for another reason: say so now
+    if (now() - start >= ms) return { ok: false, reason: 'the previous Reskin step is still finishing; try again in a moment', busy: true }
+    await sleep(Math.min(gap, Math.max(1, ms - (now() - start))))
+  }
+}
+
 // Chrome exactly as we started it: Google Chrome's own executable, with this profile folder as an exact argument.
 const CHROME_EXE = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 export function isOurSidecarCommand(command, dir) {
@@ -236,6 +261,18 @@ TICK.runLimitWantsMs = TICK.runLimitMs - TICK.restoreMs + 2 * TICK.wantMs
 // The no-skin tick (4 Nov 2026, `tick off`): after the close the helper takes any skin off (confirmMs) and then a
 // read-only check (checkMs) must prove "no skin on" before the plan's parts. 184 s / 220 s; the mod allows 200 s / 235 s.
 TICK.checkMs = 10_000
+// recheckMs (9 Nov 2026): a tick run that saw the port open looks at it once more this long after it confirmed it closed,
+// before its safety nets stand down. On 9 Nov the port was found open again about ten minutes after a run, most likely
+// from a second click on the menu item; this catches such a click in the first seconds after a run (and closes it), not
+// one made minutes later. Taken from the run's own limit (skipped when too little is left), so no allowance changes.
+TICK.recheckMs = 5_000
+// The whole second look, worst case: the wait, one port look (4 s cap), one close (6 s cap), 0.3 s, one more look, and
+// margin for the closing lines. The tick run's own watchdog (a close that can block for 6 s) is retired just before, as
+// the port is confirmed closed by then (guardians and the deadline stay). It starts only when this much of the run's
+// own limit is left, so it never runs past it
+// (and the /skin plugin allows at least 6 s more than the run's limit). A port still open after that one close is left
+// to guardian B, which stays on duty because the report then says "NOT confirmed closed" (exit 3).
+TICK.recheckBudgetMs = TICK.recheckMs + 4_000 + 6_000 + 300 + 4_000 + 700
 TICK.runLimitStartMs = TICK.runLimitMs + TICK.checkMs
 TICK.runLimitStartWantsMs = TICK.runLimitWantsMs + TICK.checkMs
 
@@ -609,6 +646,40 @@ export function judgeHealth(ack, { cssOf, digestOf, tested = [] }) {
   return res('pass', common)
 }
 
+// Band (5 Nov 2026): what the appearance band may claim, from one read-only check answer. Each claim is 'unknown' unless
+// proven now; the band shows a name, On or Off, and the accent only from these.
+// skin: a preset name only on a health pass (that preset, its digest equal to the file's), 'off' only on verdict none.
+// sidebar: 'on' only when the helper's sheet has headers on, the look was stable, every page was readable and shows the type
+//   marker, and at least one page has project headers on screen; 'off' only when the sheet has headers off, the look was
+//   stable, every page was readable, and no page shows the marker unless a font (which shares it) is on.
+// mode: 'dark' or 'light' only when every page's scheme agrees with each other and with the helper's own reading.
+// accent: the proven skin's --cds-text-accent for the proven mode (#rrggbb), else null.
+export function bandClaims(ack, { cssOf, digestOf }) {
+  const out = { skin: 'unknown', sidebar: 'unknown', mode: 'unknown', accent: null }
+  if (!ack || typeof ack !== 'object') return out
+  const j = judgeHealth(ack, { cssOf, digestOf, tested: [] })
+  if (j.verdict === 'pass' && typeof ack.current === 'string') out.skin = ack.current
+  else if (j.verdict === 'none') out.skin = 'off'
+  const s = ack.sample
+  const pages = s && s.stable === true && Array.isArray(s.pages) && s.pages.length > 0 ? s.pages : null
+  const readable = pages !== null && pages.every((p) => p && typeof p === 'object' && !p.error && typeof p.typeMarker === 'boolean')
+  if (ack.ok === true && readable) {
+    if (ack.type === 'on' && pages.every((p) => p.typeMarker) && pages.some((p) => (p.look?.header ?? null) !== null || (p.look?.headerEmph ?? null) !== null)) out.sidebar = 'on'
+    const fontOn = typeof ack.font === 'string' && ack.font !== ''
+    if (ack.type === 'off' && (fontOn || pages.every((p) => !p.typeMarker))) out.sidebar = 'off'
+    const schemes = new Set(pages.map((p) => (p.scheme === 'dark' || p.scheme === 'light' ? p.scheme : 'x')))
+    const own = ack.dark === true ? 'dark' : ack.dark === false ? 'light' : 'y'
+    if (schemes.size === 1 && schemes.has(own)) out.mode = own
+  }
+  if (out.skin !== 'unknown' && out.skin !== 'off' && out.mode !== 'unknown') {
+    const css = cssOf(out.skin)
+    const block = css === null ? null : modeBlock(css, out.mode)
+    const m = block === null ? null : /--cds-text-accent\s*:\s*(#[0-9a-fA-F]{6})\b/.exec(block)
+    if (m) out.accent = m[1].toLowerCase()
+  }
+  return out
+}
+
 export const HEALTH_REPAIR = 'Repair: /skin off puts Claude\'s own colours back (or quit and reopen Claude). To report it, run /skin log and send the newest entry; it names your Claude version.'
 // The plain report lines for a judged check, and the exit code (0 pass, none, unknown; 1 fail, structure).
 export function healthReport(j, ack, testedList = []) {
@@ -691,7 +762,12 @@ export const CLAUDE_BINARY = '/Applications/Claude.app/Contents/MacOS/Claude'
 // (names, markers, actions). A helper of another generation is still running OLD code inside Claude: switching through
 // it, checking through it or ticking a new one beside it could leave two skins on, so every path refuses until Claude
 // is quit and reopened (which ends the old helper and its colours).
-export const HELPER_GEN = 8
+// 9 since 5 Nov 2026: the skin set changed (kanagawa added, verc retired), and a helper holds its own copy of the set.
+// 10 since 7 Nov 2026: the chat font, size and weight parts changed (your questions added), and a helper holds its parts.
+// 11 since 8 Nov 2026: two fonts added (commissioner, jetbrains), and a helper holds its parts.
+// 12 since 9 Nov 2026: the health sampler skips boxes Claude forces clear (exactly !bg-transparent or bg-transparent!),
+// and a helper holds the sampler.
+export const HELPER_GEN = 12
 export const OUTDATED_WHY = 'Reskin was updated after the colour helper inside Claude started. Quit and reopen Claude once (that ends the old helper and its colours), then run /skin again.'
 export function liveSession(fs, dir, proc, { uid = process.getuid(), claudeStart } = {}) {
   // A folder or session file that cannot be trusted is not proof of a running helper: a helper lives only inside the
@@ -786,8 +862,9 @@ export function readPrefs(fs, dir, uid = process.getuid()) {
   return { last: typeof last === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(last) ? last : null, type: r.value?.type === true, font: typeof font !== 'string' ? null : parseLook(font) !== null ? font : Object.hasOwn(FONT_ALIASES, font) ? FONT_ALIASES[font] : null }
 }
 
-// Fonts (3 Nov 2026): the reviewed stacks, by short name. Every name is installed on the owner's Mac; only lato
-// has no Greek letters (Greek text falls back to the system font, accepted).
+// Fonts (3 Nov 2026): the reviewed stacks, by short name. Each was checked installed and drawing on a test Mac; only lato
+// has no Greek letters (Greek text falls back to the system font, accepted). 8 Nov 2026: commissioner and jetbrains
+// (JetBrains Mono, every letter the same width) added.
 export const FONT_STACKS = Object.freeze({
   'inter-tight': 'Inter Tight, system-ui, sans-serif',
   literata: 'Literata, system-ui, sans-serif',
@@ -796,8 +873,10 @@ export const FONT_STACKS = Object.freeze({
   roboto: 'Roboto, system-ui, sans-serif',
   lato: 'Lato, system-ui, sans-serif',
   'zen-maru': 'Zen Maru Gothic, system-ui, sans-serif',
+  commissioner: 'Commissioner, system-ui, sans-serif',
+  jetbrains: 'JetBrains Mono, system-ui, sans-serif',
 })
-// Where each font can be downloaded for free (all seven are under the SIL Open Font License, google/fonts `ofl/`).
+// Where each font can be downloaded for free (all nine are under the SIL Open Font License, google/fonts `ofl/`).
 // Reskin ships names only, never font files.
 export const FONT_LINKS = Object.freeze({
   'inter-tight': 'https://fonts.google.com/specimen/Inter+Tight',
@@ -807,6 +886,8 @@ export const FONT_LINKS = Object.freeze({
   roboto: 'https://fonts.google.com/specimen/Roboto',
   lato: 'https://fonts.google.com/specimen/Lato',
   'zen-maru': 'https://fonts.google.com/specimen/Zen+Maru+Gothic',
+  commissioner: 'https://fonts.google.com/specimen/Commissioner',
+  jetbrains: 'https://fonts.google.com/specimen/JetBrains+Mono',
 })
 // Old names that quietly mean a current font (3 Nov 2026: Inter Tight replaced Inter, and "inter" or "Inter" typed, or a
 // remembered "inter", means Inter Tight). Exact keys only.
@@ -860,10 +941,11 @@ export const FONT_WEIGHTS = Object.freeze({
   // Only weights each installed family really has (font files, 4 Nov 2026): Lato has no 500 or 600, Zen Maru Gothic no 600.
   'inter-tight': [300, 400, 500, 600], literata: [300, 400, 500, 600], plex: [300, 400, 500, 600], noto: [300, 400, 500, 600],
   roboto: [300, 400, 500, 600], lato: [300, 400], 'zen-maru': [300, 400, 500],
+  commissioner: [300, 400, 500, 600], jetbrains: [300, 400, 500, 600],
 })
 export const SECTIONS = Object.freeze({
   ui: Object.freeze({ label: 'Everything else', help: 'menus, buttons, settings and the rest', sizes: [], weights: [] }),
-  chat: Object.freeze({ label: 'Chat text', help: 'replies and the message box', sizes: FONT_SIZES, weights: [300, 400, 500] }),
+  chat: Object.freeze({ label: 'Chat text', help: 'replies, your questions and the message box', sizes: FONT_SIZES, weights: [300, 400, 500] }),
   rows: Object.freeze({ label: 'Sidebar rows', help: 'session names and the other sidebar row text', sizes: [12, 13, 14, 15], weights: [300, 400, 500] }),
   headers: Object.freeze({ label: 'Project headers', help: 'the project names in the sidebar', sizes: [12, 13, 14, 15, 16], weights: [400, 500, 600] }),
 })
@@ -1011,6 +1093,11 @@ export function fontKeyOf(typed) {
 // message is the refusal. `isPreset(name)` says whether a preset file exists; `fonts` whether this copy has fonts.
 // font: undefined (not given), 'off', or { name, size } with name from FONT_STACKS and size from FONT_SIZES or null.
 const SET_ALONE = new Set(['list', 'status', 'check', 'about', 'log', 'remove'])
+// Skins taken out of the set (5 Nov 2026: a clear message, not a quiet swap to another skin). A typed, saved or
+// band-picked retired name changes nothing; every path that takes a skin name says so with retiredLine().
+export const RETIRED_SKINS = Object.freeze({ verc: Object.freeze({ why: 'its light half looked almost the same as github and ayu', try: Object.freeze(['github', 'ayu']) }) })
+export const isRetired = (name) => typeof name === 'string' && Object.hasOwn(RETIRED_SKINS, name)
+export const retiredLine = (name) => isRetired(name) ? `The skin ${name} was retired (${RETIRED_SKINS[name].why}). Nothing was changed. Try ${RETIRED_SKINS[name].try.join(' or ')} instead.` : null
 export const SET_USAGE = 'Use: /skin <skin> font <name> type on|off (each part optional), for example /skin dracula font plex type on.'
 export function parseSetLine(words, { isPreset, fonts = true } = {}) {
   const w = words.map((x) => String(x).toLowerCase()).filter((x) => x !== '')
@@ -1020,6 +1107,7 @@ export function parseSetLine(words, { isPreset, fonts = true } = {}) {
   if (lone !== undefined) throw new Error(lone === 'remove' ? 'remove takes everything off; use it on its own (/skin remove).' : `${lone} goes on its own (/skin ${lone}).`)
   let i = 0
   if (w[0] !== 'font' && w[0] !== 'type') {
+    if (isRetired(w[0])) throw new Error(retiredLine(w[0]))
     if (w[0] !== 'off' && !(/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(w[0]) && isPreset?.(w[0]) === true)) throw new Error(`No skin called ${w[0].slice(0, 40)}. ${SET_USAGE}`)
     out.skin = w[0]
     i = 1
@@ -1070,6 +1158,11 @@ export function fontLabel(key) {
   if (ids === null) return Object.hasOwn(LEGACY_FONTS, key) ? LEGACY_FONTS[key] : String(key).slice(0, 40)
   const fams = lookFonts(ids).map(fontFamily)
   return fams.length === 0 ? "Claude's own font" : fams.length === 1 ? fams[0] : `${fams.slice(0, -1).join(', ')} and ${fams.at(-1)}`
+}
+// A stored look in plain words for the reports: every part, sizes and weights too (fontLabel names the families only).
+export function fontWords(key) {
+  const ids = parseLook(key)
+  return ids === null || ids.length === 0 ? fontLabel(key) : describeLook(ids).join('; ')
 }
 export const slotFailLine = (what, ack) => `${what} did not complete: ${(ack.errors ?? []).join('; ') || 'no reason given'}${ack.partial ? '. Part of it was undone again' : ''}${ack.verified === 'unknown' ? '. What is on now is not proven: press Cmd-R in Claude, or run /skin check' : ''}.`
 // The one-line command's changes, in order: skin, then font, then type, each once through its own request. Stops at the
@@ -1196,7 +1289,7 @@ export async function restoreParts({ wants, prefs, type, font, fontShipped, caps
   return { ok: lineOk, lines, save }
 }
 
-// The no-skin tick's plan (4 Nov 2026, design v2 to v4): what `tick off` will do after the close, computed ONCE before
+// The no-skin tick's plan (4 Nov 2026): what `tick off` will do after the close, computed ONCE before
 // the prompt from the asked parts (--want-font, --want-type) and the remembered ones (prefs), announced on the card,
 // and then carried out exactly as announced (never re-read from prefs). Asked parts first (font, then headers), then
 // remembered ones (headers, then font). A remembered Off is nothing to do and is not in the plan; an asked Off is.
@@ -1218,7 +1311,7 @@ export function planPartWords(p) {
   return p.asked ? what : `${what}, as last time`
 }
 export const planWords = (parts) => parts.map(planPartWords).join(' and ')
-// After the close: the helper's answer to `off` (design v2 [r1-5]). Only a done, ok answer to exactly that action counts.
+// After the close: the helper's answer to `off`. Only a done, ok answer to exactly that action counts.
 export function judgeOff(off) {
   if (off === null || off === undefined || off.action !== 'off' || off.phase !== 'done') return { ok: false, why: 'the colour helper did not answer the request to take any skin off' }
   if (off.ok !== true) return { ok: false, why: `the colour helper could not take the skin off: ${(Array.isArray(off.errors) ? off.errors : []).slice(0, 3).map(String).join('; ') || 'no reason given'}` }
@@ -1290,7 +1383,7 @@ export const FONT_MENU_LINE ="Claude's own font menu is overridden for body text
 // The check's font line, per kind of text: does the computed family start with the wanted font? Only a stable look
 // counts. A kind not on screen, unreadable or changing is "not checked", never a pass. Never says "rendered": a
 // computed family cannot prove which font file drew each letter.
-const FONT_KINDS = [['paragraph', 'chat text'], ['list', 'reply lists'], ['bold', 'bold'], ['composer', 'message box'], ['sidebarRow', 'sidebar rows']]
+const FONT_KINDS = [['paragraph', 'chat text'], ['list', 'reply lists'], ['bold', 'bold'], ['composer', 'message box'], ['sidebarRow', 'sidebar rows'], ['question', 'your questions']]
 export function fontLines(ack, installed = null) {
   const font = ack?.font
   if (font === undefined || font === null) return []
@@ -1337,7 +1430,7 @@ export function lookLines(ack, installed = null) {
   for (const sec of Object.keys(SECTIONS)) {
     if (!ids.some((id) => id.startsWith(`${sec}.`)) && !(sec !== 'ui' && get('ui', 'font') !== null)) continue
     const f = sectionFont(ids, sec), z = get(sec, 'size'), w = get(sec, 'weight')
-    const kinds = sec === 'chat' ? [['paragraph', 'chat text'], ['composer', 'message box']] : sec === 'rows' ? [['row', 'session names']] : sec === 'headers' ? [['header', 'headers'], ['headerEmph', 'active headers']] : [['ui', 'buttons']]
+    const kinds = sec === 'chat' ? [['paragraph', 'chat text'], ['composer', 'message box'], ['question', 'your questions']] : sec === 'rows' ? [['row', 'session names']] : sec === 'headers' ? [['header', 'headers'], ['headerEmph', 'active headers']] : [['ui', 'buttons']]
     const parts = []
     for (const [kind, words] of kinds) {
       const tests = []
@@ -1357,7 +1450,7 @@ export function lookLines(ack, installed = null) {
 export const SIZE_MENU_LINE = "Claude's own Transcript text size has no effect on chat text while a Reskin size is on; /skin font <name> with no size gives it back."
 // The check's size line: the computed size AND line height of chat text and the message box, against the size and its
 // SIZE_LEADING, each within 0.05 px (Claude computes 20.0004px). Not on screen, unreadable or not numbers = not checked.
-const SIZE_KINDS = [['paragraph', 'chat text'], ['composer', 'message box']]
+const SIZE_KINDS = [['paragraph', 'chat text'], ['composer', 'message box'], ['question', 'your questions']]
 export function sizeLine(size, pages) {
   const near = (v, want) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v - want) <= 0.05
   const parts = SIZE_KINDS.map(([kind, words]) => {
@@ -1461,12 +1554,34 @@ export function claudePidOf(r, binary = CLAUDE_BINARY) {
 
 // The debugger line names the measured time, from the moment Reskin saw the port open to the moment it
 // confirmed it closed. The time before Reskin saw it (at most one probe gap) is not in it, and the words say so.
-export function debuggerClosedLine(doorMs, neverOpened = false) {
+export function debuggerClosedLine(doorMs, neverOpened = false, stillClosedS = null) {
   if (neverOpened) return 'debugger: confirmed closed (it never opened)'
+  // A later look that found it still closed (recheckMs) is added, so the line says how long it stayed closed.
+  const later = Number.isFinite(stillClosedS) && stillClosedS > 0 ? `; still closed ${stillClosedS} s later` : ''
   return Number.isFinite(doorMs) && doorMs >= 0
-    ? `debugger: confirmed closed (seen open -> confirmed closed: ${(doorMs / 1000).toFixed(1)} s)`
-    : 'debugger: confirmed closed'
+    ? `debugger: confirmed closed (seen open -> confirmed closed: ${(doorMs / 1000).toFixed(1)} s${later})`
+    : later ? `debugger: confirmed closed (${later.slice(2)})` : 'debugger: confirmed closed'
 }
+
+// The hint printed while a tick run waits (9 Nov 2026: the old "click it once more" could be read later, after the run,
+// as an instruction to click again, which opens the debugger with nothing watching it).
+export const TICK_HINT = 'No debugger yet. Developer is in the top menu bar, next to Window (not under Help). If you have not clicked yet, click Developer > Enable Main Process Debugger once while this run is waiting. If you already clicked, wait and do not click again. Once this run has ended, do not click it at all.'
+// The second look (9 Nov 2026), with every outside action passed in so tests can drive it: after TICK.recheckMs, one
+// fresh look decides the port state reported, whatever it says (an unreadable look is "unknown", never "closed"). Open:
+// one close, then one more fresh look, which is what the report reads. Skipped (port: null, keep the first look) only
+// when less than TICK.recheckBudgetMs of the run's limit is left.
+export async function secondLook({ look, close, sleep, leftMs, recheckMs = TICK.recheckMs, budgetMs = TICK.recheckBudgetMs }) {
+  if (!(leftMs >= budgetMs)) return { port: null, stillClosedS: null, reopened: false, note: 'second look at the port skipped (too little time left in this run)' }
+  await sleep(recheckMs)
+  const again = look()
+  if (again.state === 'closed') return { port: again, stillClosedS: recheckMs / 1000, reopened: false, note: null }
+  if (again.state !== 'open') return { port: again, stillClosedS: null, reopened: false, note: `the second look at the port could not be read (${again.detail ?? 'no detail'})` }
+  close()
+  await sleep(300)
+  return { port: look(), stillClosedS: null, reopened: true, note: `debugger seen open again ${recheckMs / 1000} s after it was confirmed closed; tried to close it once more (the lines below say whether that worked)` }
+}
+// The warning when the second look finds the port open again after the run had confirmed it closed.
+export const REOPENED_WARNING = 'the debugger opened again after this run had closed it, most likely from another click on Developer > Enable Main Process Debugger. Do not click that item again; the next /skin run asks when a click is needed.'
 
 // Dot census test sheets (dotcheck-*): the run that holds the lock owns them and deletes them when it ends, but only the
 // very file it saw (same inode, size and time): a sheet written again meanwhile, for a later run, is left alone.

@@ -37,13 +37,14 @@ import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import {
-  CHROME_LOOKUP_JXA, EXIT, MIN_NODE_MAJOR, acquireLock, ownTestSheets, chromeLookup, claudeRunning, dialogScript, guardScript,
+  CHROME_LOOKUP_JXA, EXIT, MIN_NODE_MAJOR, acquireLock, acquireLockWaiting, parseLockWait, ownTestSheets, chromeLookup, claudeRunning, dialogScript, guardScript,
   hideScript, identityOf, nodeOk, pgrepState, portState, safePid, watchDialog, writeAll,
   closeMessageThenApply, dialogReadScript, parseDialogRead, provesNoDialog, NO_CHROME_GUARD_FIRST_S, NO_CHROME_TIMES,
-  CLAUDE_BINARY, TICK, LOCK_PORT, checksLine, helperActiveLine, judgeHealth, healthReport, expectedColours, judgeChecks, liveSession, parsePs, privateDir, readPrefs, sendSwitch,
-  stateDirOf, writePrivateJson, writePrivateText, readPrivateJson, debuggerClosedLine, tcpProbe, TYPE_WHAT, typeLine,
+  CLAUDE_BINARY, TICK, LOCK_PORT, checksLine, helperActiveLine, judgeHealth, bandClaims, healthReport, expectedColours, judgeChecks, liveSession, parsePs, privateDir, readPrefs, sendSwitch,
+  stateDirOf, writePrivateJson, writePrivateText, readPrivateJson, debuggerClosedLine, TICK_HINT, REOPENED_WARNING, secondLook, tcpProbe, TYPE_WHAT, typeLine,
   FONT_STACKS, FONT_LINKS, FONT_SIZES, fontFamily, fontName, fontKey, fontKeyOf, fontBase, splitFontKey, SIZE_MENU_LINE, FONT_INSTALLED_JXA, fontInstalled, FONT_MENU_LINE, fontLines, parseSetLine, runSetParts, restoreParts, slotPairOk, slotFailLine, buildPlan, planLine, runPlan, judgeOff, judgeNoSkin,
-  SECTIONS, FONT_WEIGHTS, parseLook, lookKey, lookSetWants, lookOffered, lookFonts, fontLabel, describeLook, mergeSection,
+  SECTIONS, FONT_WEIGHTS, parseLook, lookKey, lookSetWants, lookOffered, lookFonts, fontLabel, fontWords, describeLook, mergeSection,
+  RETIRED_SKINS, isRetired, retiredLine,
 } from './skin-lib.mjs'
 import { loggingOn, startRunLog } from './skin-log.mjs'
 
@@ -85,7 +86,9 @@ if (!nodeOk(process.versions.node)) {
 // The run's own start: the deadline below counts from here, so the checks before the prompt (stylesheet, slot-offers,
 // installed font) use up the same allowance the /skin mod counts from launching this process.
 const RUN_START = Date.now()
-const argv0 = process.argv.slice(2)
+// --lock-wait=<ms> (band, 5 Nov 2026) is read here and taken out, so no verb's own parser ever sees it.
+const lockWait = parseLockWait(process.argv.slice(2))
+const argv0 = lockWait.rest
 // The first word may name the way to run: tick ("I tick it"), one-click (the run ticks), switch, status.
 const verb = ['tick', 'one-click', 'switch', 'status', 'check', 'type', 'font', 'set', 'look'].includes(argv0[0]) ? argv0[0] : null
 const tickMode = verb === 'tick'
@@ -98,6 +101,7 @@ const DEV_MODE_LINE = 'First time only: in Claude choose Help > Troubleshooting 
 const dryRun = args.includes('--dry-run')
 const checkOnly = args.includes('--check')
 const usage = (m) => { console.error(m); console.log('PORT_STATE: unknown'); finish('refused', EXIT.usage) }
+if (lockWait.why) usage(lockWait.why)
 // Release switch (B1): the public package ships `tick` only, marked by release.json beside this file with
 // {"oneClick": false}. No file at all (a development copy): everything stays. Any file that is there counts as off unless
 // it reads cleanly with "oneClick": true; a file that cannot be looked at counts as off too.
@@ -142,6 +146,8 @@ const batchArgs = () => {
   if (!dryRun && !dots && !rest.includes('--screenshots-ok')) usage('Batch mode saves screenshots of the whole Claude window, including the open chat and anything secret on screen (to a private folder). Open a harmless chat first, then run it again with --screenshots-ok.')
   const names = words[0].split(',')
   if (names.some((n) => !/^[a-z0-9-]+$/.test(n))) usage('Preset names use only lowercase letters, digits and dashes, separated by commas.')
+  const retiredIn = names.find((n) => isRetired(n))
+  if (retiredIn !== undefined) usage(retiredLine(retiredIn))
   const files = names.map((n) => path.join(here, 'presets', `${n}.css`))
   const missing = files.filter((f) => !existsSync(f))
   if (missing.length > 0) usage(`No such preset: ${missing.map((f) => path.basename(f, '.css')).join(', ')} (see presets/).`)
@@ -204,6 +210,10 @@ else if (arg && !['switch', 'status', 'check', 'type', 'font', 'set', 'look'].in
   const asPath = real(path.resolve(arg))
   const named = PRESET_NAME.test(arg) && existsSync(presetFile(arg)) ? arg
     : asPath !== null && path.dirname(asPath) === real(path.join(here, 'presets')) && asPath.endsWith('.css') && PRESET_NAME.test(path.basename(asPath, '.css')) ? path.basename(asPath, '.css') : null
+  // A retired name is refused first, before any file lookup, so a leftover presets/verc.css from an older copy never
+  // makes it an apply again; a path to such a file counts by its file name.
+  const retiredAs = isRetired(arg) ? arg : isRetired(path.basename(String(arg), '.css')) ? path.basename(String(arg), '.css') : null
+  if (retiredAs !== null) usage(retiredLine(retiredAs))
   if (named === null) usage(`Not one of Reskin's presets: ${arg}. Use a preset name from presets/ (for example dracula).`)
   if (named.startsWith('dotcheck-')) usage(`${named} is a dot census test sheet: it runs only in a batch with --dot-census.`)
   const css = presetFile(named)
@@ -268,8 +278,8 @@ const osaAsync = (script, ms = 3_000) => new Promise((res) => {
 const identity = (pid) => identityOf(run('/bin/ps', ['-o', 'command=', '-p', String(pid)]), dir) // ours / other / gone / unknown
 
 // ---- switch and status: talk to the colour helper through its private folder. No tick, no port, no Chrome. ----
-const procOf = (pid) => parsePs(spawnSync('/bin/ps', ['-o', 'lstart=,comm=', '-p', String(pid)], { encoding: 'utf8', timeout: 4_000, env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }))
-const portLine = () => { const r = spawnSync('/usr/sbin/lsof', ['-nP', '-iTCP:9229', '-sTCP:LISTEN'], { encoding: 'utf8', timeout: 4_000 }); return portState({ status: r.status, error: r.error, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }) }
+const procOf = (pid) => parsePs(spawnSync('/bin/ps', ['-o', 'lstart=,comm=', '-p', String(pid)], { encoding: 'utf8', timeout: 4_000, killSignal: 'SIGKILL', env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }))
+const portLine = () => { const r = spawnSync('/usr/sbin/lsof', ['-nP', '-iTCP:9229', '-sTCP:LISTEN'], { encoding: 'utf8', timeout: 4_000, killSignal: 'SIGKILL' }); return portState({ status: r.status, error: r.error, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }) }
 // P5: remember the preference (a preset name), never the permission. Failing to save it never fails a run.
 // `type` and `font` keep what was saved unless given: a skin change or Off leaves them as they were.
 const savePrefs = (last, type = readPrefs(nodeFs, STATE).type, font = readPrefs(nodeFs, STATE).font) => {
@@ -309,7 +319,9 @@ const unmarkRun = () => {
 // After a restart: the next tick puts the skin on and then restores the remembered headers and font itself (no second
 // tick), so the offer names them. Starts with "Reapply " so the mod's list keeps it.
 const reapplyOffer = (last, type = false, font = null) => {
-  const extras = [type ? 'the project headers' : null, fontShipped && font ? `the font ${font}` : null].filter(Boolean).join(' and ')
+  const extras = [type ? 'the project headers' : null, fontShipped && font ? `your fonts (${fontWords(font)})` : null].filter(Boolean).join(' and ')
+  // A retired skin cannot come back: say so and name what to pick instead (the offer still starts with "Reapply").
+  if (isRetired(last)) return `Reapply a skin? Your last skin, ${last}, was retired (${RETIRED_SKINS[last].why}), so it cannot come back. Pick another, for example /skin ${RETIRED_SKINS[last].try[0]} --tick; it needs one tick of Developer > Enable Main Process Debugger.${extras ? ` That also brings back ${extras}.` : ''}`
   if (last) return `Reapply ${last}? Run: /skin ${last} --tick (or: node skin-auto.mjs tick ${last}); it needs one tick of Developer > Enable Main Process Debugger.${extras ? ` That also brings back ${extras}.` : ''}`
   // No skin was on, only headers or a font: the no-skin tick starts the helper with Claude's own colours and brings them
   // back (4 Nov 2026).
@@ -388,9 +400,9 @@ async function typeRun(live, which) {
   }
   const { ack } = await slotChange(live, `type-${which}`)
   if (ack === null) return ['failed', EXIT.failed, [`type ${which} unconfirmed: the colour helper did not answer within ${SLOT_WAIT_MS / 1000} s. Nothing else was tried (no tick, no port).`, NO_PORT, 'helper: not answering']]
-  const font = pairOk(ack.verified) && ack.verified.font ? ` The font ${ack.verified.font} stays on.` : ''
+  const font = pairOk(ack.verified) && ack.verified.font ? ` Fonts stay on: ${fontWords(ack.verified.font)}.` : ''
   return [ack.ok ? 'ok' : 'failed', ack.ok ? EXIT.ok : EXIT.failed, [
-    ack.ok ? (which === 'on' ? `Type on: ${TYPE_WHAT} (${ack.applied} of ${ack.eligible} Claude page(s)). It stays through skin changes and /skin off; /skin type off or /skin remove takes it off.${font}` : `Type off: Claude's own header type is back${ack.reloaded ? ` (${ack.reloaded} page(s) reloaded to be sure)` : ''}.${font}`)
+    ack.ok ? (which === 'on' ? `Type on: ${TYPE_WHAT}. It stays through skin changes and /skin off; /skin type off or /skin remove takes it off.${font}` : `Type off: Claude's own header type is back${ack.reloaded ? ' (Claude reloaded to be sure)' : ''}.${font}`)
       : slotFailLine(`Type ${which}`, ack),
     '(as the colour helper reports; no debugger checked it)', NO_PORT, helperActiveLine(live.session.version),
   ]]
@@ -422,7 +434,7 @@ async function fontRun(live, typed) {
   if (ack === null) return ['failed', EXIT.failed, [`font ${which} unconfirmed: the colour helper did not answer within ${SLOT_WAIT_MS / 1000} s. Nothing else was tried (no tick, no port).`, NO_PORT, 'helper: not answering']]
   const headers = pairOk(ack.verified) && ack.verified.headers ? ' The project headers stay on.' : ''
   return [ack.ok ? 'ok' : 'failed', ack.ok ? EXIT.ok : EXIT.failed, [
-    ack.ok ? (which === 'off' ? `Font off: Claude's own font is back${ack.reloaded ? ` (${ack.reloaded} page(s) reloaded to be sure)` : ''}.${headers}` : `Font ${which} on: ${fontFamily(which)} for chat text, replies, the message box, buttons and the sidebar${splitFontKey(which).size === null ? '' : `, at ${splitFontKey(which).size}px for chat text and the message box`} (${ack.applied} of ${ack.eligible} Claude page(s)). It stays through skin changes and /skin off; /skin font off or /skin remove takes it off.${headers}`)
+    ack.ok ? (which === 'off' ? `Font off: Claude's own font is back${ack.reloaded ? ' (Claude reloaded to be sure)' : ''}.${headers}` : `Font ${which} on: ${fontFamily(which)} for chat text, replies, the message box, buttons and the sidebar${splitFontKey(which).size === null ? '' : `, at ${splitFontKey(which).size}px for chat text and the message box`}. It stays through skin changes and /skin off; /skin font off or /skin remove takes it off.${headers}`)
       : slotFailLine(`Font ${which}`, ack),
     which !== 'off' && ack.ok ? FONT_MENU_LINE : null,
     which !== 'off' && ack.ok && splitFontKey(which).size !== null ? SIZE_MENU_LINE : null,
@@ -438,6 +450,8 @@ async function fontRun(live, typed) {
 const LOOK_USAGE = `Usage: node skin-auto.mjs look show | look set <all|${Object.keys(SECTIONS).join('|')}> font=<name|same|claude> size=<number|claude> weight=<number|claude> (all: font only)`
 const sectionLabel = (sec) => (sec === 'all' ? 'All parts' : SECTIONS[sec].label)
 const lookJson = (o) => `LOOK: ${JSON.stringify(o)}`
+// 13 s: the helper's 10 s answer wait plus start-up. A test may shorten it (never lengthen it).
+const LOOK_DEADLINE_MS = (() => { const v = Number(process.env.SKIN_LOOK_DEADLINE_MS); return Number.isInteger(v) && v > 0 && v < 13_000 ? v : 13_000 })()
 async function lookRun(live) {
   const [sub, sec, ...opts] = args.filter((a) => !a.startsWith('--'))
   if (sub !== 'show' && sub !== 'set') return ['refused', EXIT.usage, [LOOK_USAGE]]
@@ -459,7 +473,10 @@ async function lookRun(live) {
   const cur = seen.font === null ? [] : typeof seen.font === 'string' ? parseLook(seen.font) : null
   const shown = { helper: 'active', look: cur, type: seen.type === 'on' ? 'on' : seen.type === 'off' ? 'off' : 'unknown', parts: partsOf(live) }
   if (sub === 'show') {
-    return ['ok', EXIT.ok, [lookJson(shown), cur === null ? 'fonts: not proven now (an earlier change did not finish): /skin font off clears it' : cur.length === 0 ? "fonts: Claude's own everywhere" : `fonts: ${describeLook(cur).join('; ')}`, NO_PORT]]
+    // Band (5 Nov 2026): the proven claims, each 'unknown' unless this very answer proves it.
+    const cssOf = (name) => { try { return PRESET_NAME.test(name) && !name.startsWith('dotcheck-') && existsSync(presetFile(name)) ? readFileSync(presetFile(name), 'utf8') : null } catch { return null } }
+    const claims = bandClaims({ ...seen, version: seen.version ?? live.session.version }, { cssOf, digestOf: (t) => createHash('sha256').update(t).digest('hex') })
+    return ['ok', EXIT.ok, [lookJson({ ...shown, ...claims }), cur === null ? 'fonts: not proven now (an earlier change did not finish): /skin font off clears it' : cur.length === 0 ? "fonts: Claude's own everywhere" : `fonts: ${describeLook(cur).join('; ')}`, NO_PORT]]
   }
   if (cur === null) return ['refused', EXIT.refused, [lookJson(shown), 'The font state could not be proven, so nothing was changed. Run /skin font off, then try again.', NO_PORT]]
   const m = mergeSection(cur, sec, want)
@@ -487,8 +504,18 @@ async function lookRun(live) {
 }
 
 async function helperRun() {
-  const lock = await acquireLock()
+  const lock = await acquireLockWaiting(lockWait.ms)
   if (!lock.ok) { console.error(`Not started: ${lock.reason}.`); console.log(`PORT_STATE: ${portLine().state}`); finish('refused', EXIT.refused) }
+  // Band (5 Nov 2026): a read (look show) ends itself LOOK_DEADLINE_MS after taking the lock, whatever happens, so the
+  // operating system frees the lock on time and a queued command (--lock-wait) can follow. Every wait inside is async or
+  // a spawnSync with its own timeout, so this timer always gets to run. A change (look set) is never cut short.
+  if (verb === 'look' && args.filter((a) => !a.startsWith('--'))[0] === 'show' && args.filter((a) => !a.startsWith('--')).length === 1) {
+    setTimeout(() => { console.log(lookJson({ helper: 'noanswer' })); console.log('The colour helper did not answer in time. Nothing was changed.'); console.log(NO_PORT); finish('failed', EXIT.failed) }, LOOK_DEADLINE_MS).unref()
+    // Test only, and only with a shortened deadline: stand in for a helper that never answers.
+    // `sync`: a real blocking child begun just before the deadline (the longest any check here may block, 4 s).
+    if (LOOK_DEADLINE_MS < 13_000 && process.env.SKIN_TEST_LOOK_STALL === 'sync') { await new Promise((r) => setTimeout(r, Math.max(0, LOOK_DEADLINE_MS - 200))); spawnSync('/bin/sleep', ['30'], { timeout: 4_000, killSignal: 'SIGKILL' }) }
+    if (LOOK_DEADLINE_MS < 13_000 && (process.env.SKIN_TEST_LOOK_STALL === '1' || process.env.SKIN_TEST_LOOK_STALL === 'sync')) await new Promise(() => setInterval(() => {}, 1_000))
+  }
   const live = liveSession(nodeFs, STATE, procOf, { claudeStart })
   const prefs = readPrefs(nodeFs, STATE)
   const end = async (result, code, lines) => {
@@ -506,7 +533,7 @@ async function helperRun() {
       `last skin: ${prefs.last ?? 'none'}`,
       ...healthHint(live),
       `type: ${prefs.type ? 'on when last set' : 'off'}`,
-      fontShipped ? `font: ${prefs.font ? `${prefs.font} when last set` : 'off'}` : null,
+      fontShipped ? `font: ${prefs.font ? `${fontWords(prefs.font)} when last set` : 'off'}` : null,
       fontShipped && prefs.font && live.state === 'active' ? FONT_MENU_LINE : null,
       live.state === 'outdated' || live.state === 'unknown' ? (live.state === 'outdated' ? live.why : 'Quit and reopen Claude, then run /skin again.') : live.state !== 'active' ? reapplyOffer(prefs.last, prefs.type, prefs.font) : null,
     ])
@@ -517,6 +544,7 @@ async function helperRun() {
   if (verb === 'set') return end(...(await setRun(live)))
   if (verb === 'look') return end(...(await lookRun(live)))
   const action = args[0]
+  if (isRetired(action)) return end('refused', EXIT.usage, [retiredLine(action)])
   if (!action || !(action === 'off' || action === 'remove' || (PRESET_NAME.test(action) && !action.startsWith('dotcheck-') && existsSync(presetFile(action))))) {
     return end('refused', EXIT.usage, [`Usage: node skin-auto.mjs switch <preset|off|remove>. ${action ? `No preset called ${action}.` : ''}`])
   }
@@ -580,7 +608,7 @@ function colourResult(action, ack) {
 // reported from the helper's last proven pair, so a part that a later cleanup took off again says so, and after an
 // unanswered request nothing is called proven. Prefs are saved from that final proven pair only.
 const SET_SWITCH_WAIT_MS = 10_000 // the helper allows a colour change 8 s
-const isPresetName = (n) => PRESET_NAME.test(n) && !n.startsWith('dotcheck-') && existsSync(presetFile(n))
+const isPresetName = (n) => PRESET_NAME.test(n) && !n.startsWith('dotcheck-') && !isRetired(n) && existsSync(presetFile(n))
 async function setRun(live) {
   if (args.some((a) => a.startsWith('--'))) return ['refused', EXIT.usage, ['set takes no options. Without a colour helper, use: node skin-auto.mjs tick <preset> --want-font=<name|off> --want-type=on|off']]
   let line
@@ -692,7 +720,7 @@ let parentWatch = null // tick mode: this run's own port watch, stopped by clean
 let portOpenedSeen = false // tick mode: this run itself saw the port open (even if the skin step never said so)
 let plan = null // the no-skin tick's plan, computed once before the prompt (buildPlan)
 
-// What the colour helper can do, in the words every tick prints (design v2 [r1-6]).
+// What the colour helper can do, in the words every tick prints.
 const HELPER_STAYS = 'After this, a small colour helper stays inside Claude until you quit Claude. It can only switch between Reskin\'s own presets, fonts and headers, turn them off, or remove itself; the next change needs no tick.'
 // One-click runs say what will happen before the scripted tick.
 function disclose() {
@@ -837,17 +865,32 @@ async function doCleanup() {
     if (chrome.state === 'found') warn(`Chrome is still running (pid ${chrome.pids.join(', ')}). Check it by hand.`)
     if (chrome.state === 'unknown') warn('could not check whether Chrome is still running.')
   })
-  const port = (() => { try { return portNow() } catch (e) { return { state: 'unknown', detail: e.message } } })()
+  const look = () => { try { return portNow() } catch (e) { return { state: 'unknown', detail: e.message } } }
+  let port = look()
+  // Tick mode, the port was seen open and is now closed: one more look a few seconds later (secondLook), before any
+  // safety net stands down, so a second click on the menu item right after the run is caught and closed. Whatever that
+  // look finds is what the report says; it only starts when its whole worst case fits in the run's own limit.
+  let stillClosedS = null
+  if (ticked && tickMode && (tickPortSeen || portOpenedSeen) && port.state === 'closed') {
+    // The port is confirmed closed, so the watchdog (a close that can block for 6 s) is retired here: firing during the
+    // second look it would stretch the run past its limit. The guardians and the deadline stay until the report.
+    attempt('watchdog', () => { if (watchdog) clearTimeout(watchdog); watchdog = null })
+    const r = await secondLook({ look, close: () => attempt('close reopened port', closeClaudePort), sleep, leftMs: RUN_LIMIT_MS - (Date.now() - RUN_START) })
+    if (r.note) stamp(r.note)
+    if (r.reopened) warn(REOPENED_WARNING)
+    if (r.port) port = r.port
+    stillClosedS = r.stillClosedS
+  }
   // The three lines every run that reached Claude reports.
   if (ticked) {
     if (report.checks) console.log(report.checks)
-    console.log(port.state === 'closed' ? debuggerClosedLine(report.doorMs, tickMode && !tickPortSeen && !portOpenedSeen)
-      : `debugger: NOT confirmed closed (${port.state}). Fix: quit and reopen Claude, or untick Developer > Enable Main Process Debugger.`)
+    console.log(port.state === 'closed' ? debuggerClosedLine(report.doorMs, tickMode && !tickPortSeen && !portOpenedSeen, stillClosedS)
+      : `debugger: NOT confirmed closed (${port.state}). Fix: quit and reopen Claude (Cmd+Q, then open it again); leave the Developer menu item alone.`)
     console.log(report.helper ?? 'helper: unchanged (nothing was applied)')
   }
   console.log(`PORT_STATE: ${port.state}`)
   // Only our own business if we ticked the menu; a refused run never touched the port.
-  if (ticked && port.state === 'open') warn(`port 9229 is STILL OPEN:\n${port.detail}\nQuit and reopen Claude, or untick Developer > Enable Main Process Debugger.`)
+  if (ticked && port.state === 'open') warn(`port 9229 is STILL OPEN:\n${port.detail}\nQuit and reopen Claude (Cmd+Q, then open it again); leave the Developer menu item alone.`)
   if (ticked && port.state === 'unknown') warn(`could not confirm port 9229 is closed (${port.detail}). Quit and reopen Claude to be sure.`)
   if (ticked && port.state !== 'closed') {
     exitOverride = EXIT.portNotConfirmed
@@ -889,7 +932,7 @@ const refuse = (m) => { throw new Refused(m) }
 
 async function main() {
   // 1. One run at a time on this Mac (a bound loopback port, freed by the OS even if we are killed).
-  lock = await acquireLock()
+  lock = await acquireLockWaiting(lockWait.ms)
   if (!lock.ok) refuse(`Not started: ${lock.reason}.`)
   markRun()
   // Only the run holding the lock owns the test sheets: a refused second run never deletes the first run's sheet.
@@ -901,7 +944,7 @@ async function main() {
     const live = liveSession(nodeFs, STATE, procOf, { claudeStart })
     if (live.state === 'outdated') refuse(`${live.why} Nothing was changed.`)
     if (live.state === 'unknown') refuse(`Could not tell whether a colour helper is already running (${live.why}). Quit and reopen Claude, then try again. Nothing was changed.`)
-    // The no-skin tick (design v4 [r3]): decided here, under the lock. A current helper means no tick is needed; nothing
+    // The no-skin tick: decided here, under the lock. A current helper means no tick is needed; nothing
     // is sent to it (it may be stuck: the user's next command goes through the helper paths, which say so).
     if (helperStart && live.state === 'active') refuse('A colour helper is already running, so no tick is needed. Use /skin type on, /skin font <name> or /skin fonts (without --tick). Nothing was changed.')
   }
@@ -920,7 +963,7 @@ async function main() {
     const claude = claudeNow()
     if (claude !== 'yes') refuse(claude === 'no' ? 'The Claude desktop app is not running. Nothing was changed.' : 'Could not check whether Claude is running. Nothing was changed.')
     const port = portNow()
-    if (port.state === 'open') refuse('Port 9229 is already open (a manual tick, or an earlier run). Untick Developer > Enable Main Process Debugger or quit Claude, then try again. Nothing was changed.')
+    if (port.state === 'open') refuse('Port 9229 is already open (a manual tick, or an earlier run). Quit and reopen Claude (Cmd+Q, then open it again), then try again. Nothing was changed.')
     if (port.state === 'unknown') refuse(`Could not check port 9229 (${port.detail}). Nothing was changed.`)
     // If we cannot even verify Claude's signature, skin.mjs could never close the port again: refuse BEFORE the click.
     const verify = spawnSync(NODE, [SKIN, 'verify'], { encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL' })
@@ -1106,7 +1149,7 @@ async function tickRun() {
   const claude = claudeNow()
   if (claude !== 'yes') refuse(claude === 'no' ? 'The Claude desktop app is not running. Nothing was changed.' : 'Could not check whether Claude is running. Nothing was changed.')
   const port0 = portNow()
-  if (port0.state === 'open') refuse('Port 9229 is already open (a manual tick, or an earlier run). Untick Developer > Enable Main Process Debugger or quit Claude, then try again. Nothing was changed.')
+  if (port0.state === 'open') refuse('Port 9229 is already open (a manual tick, or an earlier run). Quit and reopen Claude (Cmd+Q, then open it again), then try again. Nothing was changed.')
   if (port0.state === 'unknown') refuse(`Could not check port 9229 (${port0.detail}). Nothing was changed.`)
   const verify = spawnSync(NODE, [SKIN, 'verify'], { encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL' })
   if (verify.status !== 0) refuse(`Claude's signature could not be verified, so I did not ask for the tick: ${(verify.stdout + verify.stderr).trim().slice(0, 200)}`)
@@ -1151,7 +1194,7 @@ async function tickRun() {
     `NOW: in Claude's top menu bar (Developer sits next to Window), click Developer > Enable Main Process Debugger once. You have ${TICK.windowMs / 1000} seconds. Press Ctrl-C to cancel.`,
     DEV_MODE_LINE,
   ].filter(Boolean).join('\n'))
-  // After `Ready.` and before READY_TO_TICK (design v3 [r2-1]), so the /skin card reads it with the disclosure.
+  // After `Ready.` and before READY_TO_TICK, so the /skin card reads it with the disclosure.
   if (helperStart) console.log(planLine(plan))
   console.log('READY_TO_TICK') // the /skin mod shows the tick prompt the moment it reads this line
   // The port is also watched here, independently of the skin step, so guardian B starts even if the skin
@@ -1164,7 +1207,8 @@ async function tickRun() {
     // A probe that answers after cleanup began must not start a guardian.
     try { if ((await tcpProbe()).state === 'open' && !stopping) { portOpenedSeen = true; startGuardianB() } } catch {} finally { watching = false }
   }, 1_000)
-  const hints = TICK.hintsAtMs.map((ms) => setTimeout(() => console.log('No debugger yet. Developer is in the top menu bar, next to Window (not under Help). If you already clicked and the item now shows no tick, click it once more (once).'), ms))
+  // Never once cleanup has begun or either watch has seen the port: a hint then could prompt a second click.
+  const hints = TICK.hintsAtMs.map((ms) => setTimeout(() => { if (!stopping && !portOpenedSeen) console.log(TICK_HINT) }, ms))
   // The child ends the window itself (WINDOW_ENDED); the extra seconds only cover a child that hangs.
   const seen = await child.until(['PORT_SEEN'], TICK.windowMs + 5_000)
   for (const h of hints) clearTimeout(h)
@@ -1247,7 +1291,7 @@ async function restoreSlot() {
   return r.ok
 }
 
-// The no-skin tick, after the close (design v2 [r1-2, r1-5]): through the exact helper this run started, debugger
+// The no-skin tick, after the close: through the exact helper this run started, debugger
 // closed. `off` must come back done and ok from that helper, then a read-only `check` must give a stable "no skin on"
 // with at least one readable Claude page. Anything else is unconfirmed and fails the run (the helper may be on).
 async function startChecks() {

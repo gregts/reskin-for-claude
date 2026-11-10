@@ -11,7 +11,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Script, createContext } from 'node:vm'
 import { EventEmitter } from 'node:events'
-import { TICK, claudePidOf, debuggerClosedLine, guardScript, parseListener, tcpProbe } from '../skin-lib.mjs'
+import { TICK, TICK_HINT, REOPENED_WARNING, secondLook, claudePidOf, debuggerClosedLine, guardScript, parseListener, tcpProbe } from '../skin-lib.mjs'
 
 const tool = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 const skinSrc = readFileSync(path.join(tool, 'skin.mjs'), 'utf8')
@@ -252,7 +252,7 @@ test('The port watch never blocks (async probe, one at a time); an opening it sa
   const watch = fn.slice(fn.indexOf('  parentWatch = setInterval'), fn.indexOf('}, 1_000)'))
   assert.ok(watch.includes('if (watching) return') && watch.includes('await tcpProbe()'), 'single-flight async probe')
   assert.ok(!watch.includes('portNow()'), 'no blocking lsof inside the watch')
-  assert.match(autoSrc, /debuggerClosedLine\(report\.doorMs, tickMode && !tickPortSeen && !portOpenedSeen\)/)
+  assert.match(autoSrc, /debuggerClosedLine\(report\.doorMs, tickMode && !tickPortSeen && !portOpenedSeen, stillClosedS\)/)
 })
 
 test('Cleanup closes the port first, then ends a skin child for sure (SIGTERM, then SIGKILL after 3 s), bounded', () => {
@@ -294,4 +294,99 @@ test('A probe that answers after cleanup began starts no guardian; the time limi
 test('the "stopped before the debugger opened" warning shows the reason, not machine lines; a quick apply prints no raw answer', () => {
   assert.match(autoSrc, /filter\(\(l\) => !\['CHILD_READY', 'PORT_SEEN', 'WINDOW_ENDED'\]\.includes\(l\.trim\(\)\)\)/)
   assert.match(skinSrc, /if \(result !== undefined && !quick\) \{\n    await writeAll\(JSON\.stringify\(result, null, 2\)/)
+})
+
+// ---- Second look at the port after a tick run (9 Nov 2026) ----
+// secondLook driven with made-up port looks: what it reports is always the latest real look.
+const driver = (looks) => {
+  const log = []
+  return {
+    log,
+    opts: {
+      look: () => { const l = looks.shift(); log.push(`look:${l.state}`); return l },
+      close: () => log.push('close'),
+      sleep: async (ms) => { log.push(`sleep:${ms}`) },
+    },
+  }
+}
+const ROOM = TICK.recheckBudgetMs
+
+test('secondLook: still closed after the wait is reported with the seconds; nothing is closed', async () => {
+  const d = driver([{ state: 'closed' }])
+  const r = await secondLook({ ...d.opts, leftMs: ROOM })
+  assert.deepEqual(d.log, [`sleep:${TICK.recheckMs}`, 'look:closed'])
+  assert.equal(r.port.state, 'closed')
+  assert.equal(r.stillClosedS, 5)
+  assert.equal(r.reopened, false)
+})
+
+test('secondLook: an unreadable second look is reported as unknown, never as closed', async () => {
+  const d = driver([{ state: 'unknown', detail: 'lsof timed out' }])
+  const r = await secondLook({ ...d.opts, leftMs: ROOM })
+  assert.equal(r.port.state, 'unknown')
+  assert.equal(r.stillClosedS, null)
+  assert.match(r.note, /could not be read \(lsof timed out\)/)
+  assert.ok(!d.log.includes('close'))
+})
+
+test('secondLook: open again is closed once and reported from a fresh look (closed, open or unknown)', async () => {
+  for (const after of ['closed', 'open', 'unknown']) {
+    const d = driver([{ state: 'open', detail: 'Claude 123' }, { state: after, detail: 'x' }])
+    const r = await secondLook({ ...d.opts, leftMs: ROOM })
+    assert.deepEqual(d.log, [`sleep:${TICK.recheckMs}`, 'look:open', 'close', 'sleep:300', `look:${after}`])
+    assert.equal(r.reopened, true)
+    assert.equal(r.port.state, after, 'the report reads the look after the close')
+    assert.match(r.note, /tried to close it once more/)
+    assert.ok(!/; closed once more/.test(r.note), 'the note never claims a close it has not seen')
+    assert.equal(r.stillClosedS, null)
+  }
+})
+
+test('secondLook: skipped (no wait, no look, first look kept) when its worst case does not fit in the run limit', async () => {
+  const d = driver([])
+  const r = await secondLook({ ...d.opts, leftMs: ROOM - 1 })
+  assert.deepEqual(d.log, [])
+  assert.equal(r.port, null)
+  assert.match(r.note, /skipped/)
+  // The worst case: the wait, a 4 s look, a 6 s close, 0.3 s, another 4 s look; every run limit leaves the plugin 6 s.
+  assert.ok(TICK.recheckBudgetMs >= TICK.recheckMs + 4_000 + 6_000 + 300 + 4_000)
+  assert.equal(TICK.runLimitMs, 174_000)
+  for (const [tool, plugin] of [[TICK.runLimitMs, 180_000], [TICK.runLimitStartMs, 200_000], [TICK.runLimitWantsMs, 225_000], [TICK.runLimitStartWantsMs, 235_000]]) assert.ok(tool + 6_000 <= plugin)
+})
+
+test('cleanup: the second look runs for tick runs that saw the port, before any safety net stands down, and its result is reported', () => {
+  const clean = autoSrc.slice(autoSrc.indexOf('async function doCleanup()'), autoSrc.indexOf('for (const sig of'))
+  const call = clean.indexOf('const r = await secondLook({ look, close: () => attempt(\'close reopened port\', closeClaudePort), sleep, leftMs: RUN_LIMIT_MS - (Date.now() - RUN_START) })')
+  assert.ok(call > 0, 'the second look exists')
+  // The watchdog (a close that can block for 6 s) is retired right before it, so it cannot stretch the run past its limit.
+  const retire = clean.indexOf("attempt('watchdog', () => { if (watchdog) clearTimeout(watchdog); watchdog = null })")
+  assert.ok(retire > 0 && retire < call && clean.slice(retire, call).split('\n').length <= 3, 'watchdog retired just before the second look')
+  assert.ok(clean.indexOf("if (ticked && tickMode && (tickPortSeen || portOpenedSeen) && port.state === 'closed') {") < retire, 'only once the port is confirmed closed')
+  assert.match(clean, /if \(ticked && tickMode && \(tickPortSeen \|\| portOpenedSeen\) && port\.state === 'closed'\) \{\n(?:    \/\/[^\n]*\n)*    attempt\('watchdog'[^\n]*\n    const r = await secondLook/)
+  assert.ok(clean.includes('    if (r.port) port = r.port\n'), 'the report reads what the second look found')
+  assert.ok(clean.includes('    if (r.reopened) warn(REOPENED_WARNING)\n'))
+  for (const later of ['console.log(`PORT_STATE: ${port.state}`)', "attempt('guardian B'", "attempt('timers'", "attempt('lock'"]) {
+    const at = clean.indexOf(later)
+    assert.ok(at > call, `${later} comes after the second look`)
+  }
+  // The deadline stays armed: the second look only starts when its worst case fits, so the timeout path is unchanged.
+  assert.ok(!clean.includes("attempt('deadline'"))
+  // Not closed after it (open or unknown): the existing branch keeps the guardians, warns and exits 3.
+  assert.match(clean, /if \(ticked && port\.state !== 'closed'\) \{\n    exitOverride = EXIT\.portNotConfirmed/)
+  assert.ok(REOPENED_WARNING.includes('Do not click that item again'))
+})
+
+test('the debugger line says how long the port stayed closed; the waiting hint never invites a second click', () => {
+  assert.equal(debuggerClosedLine(120, false, 5), 'debugger: confirmed closed (seen open -> confirmed closed: 0.1 s; still closed 5 s later)')
+  assert.equal(debuggerClosedLine(null, false, 5), 'debugger: confirmed closed (still closed 5 s later)')
+  assert.equal(debuggerClosedLine(300, true, 5), 'debugger: confirmed closed (it never opened)')
+  assert.equal(debuggerClosedLine(412, false, null), 'debugger: confirmed closed (seen open -> confirmed closed: 0.4 s)')
+  assert.ok(!/once more|one more time|again now/.test(TICK_HINT))
+  assert.ok(TICK_HINT.startsWith('No debugger yet.'), 'the /skin card still finds the hint by its first words')
+  assert.ok(TICK_HINT.includes('If you have not clicked yet,'))
+  assert.ok(TICK_HINT.includes('If you already clicked, wait and do not click again.'))
+  assert.ok(TICK_HINT.includes('Once this run has ended, do not click it at all.'))
+  assert.ok(!autoSrc.includes('click it once more'))
+  // No hint once cleanup began or either watch saw the port.
+  assert.ok(autoSrc.includes('const hints = TICK.hintsAtMs.map((ms) => setTimeout(() => { if (!stopping && !portOpenedSeen) console.log(TICK_HINT) }, ms))'))
 })

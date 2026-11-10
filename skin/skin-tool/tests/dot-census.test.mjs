@@ -360,7 +360,7 @@ test('skin-auto: dotcheck sheets only in a --dot-census batch; a census batch ne
 
 test('skin-auto takes ownership of the test sheets only after it holds the lock, and never in a dry run', () => {
   const src = readFileSync(path.join(tool, 'skin-auto.mjs'), 'utf8')
-  const lock = src.indexOf('lock = await acquireLock()\n  if (!lock.ok) refuse(')
+  const lock = src.indexOf('lock = await acquireLockWaiting(lockWait.ms)\n  if (!lock.ok) refuse(')
   const own = src.indexOf("if (dotSheets.length > 0 && !dryRun) { dropSheets = ownTestSheets(dotSheets, nodeFs); process.on('exit', dropSheetsOnce) }")
   assert.ok(lock > 0 && own > lock && own - lock < 500, 'registered right after the lock check')
   assert.equal(src.split('ownTestSheets(').length - 1, 1, 'and nowhere else')

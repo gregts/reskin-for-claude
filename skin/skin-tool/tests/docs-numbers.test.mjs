@@ -87,3 +87,14 @@ test('the tick prompt and the time-up warning promise no guardian closing, and g
   assert.match(src, /backup guardians try to close it, but if in doubt, quit and reopen Claude/)
   assert.match(src, /Do not tick now\. If you already did, quit and reopen Claude/)
 })
+
+// 9 Nov 2026: every Claude version in the README's "Tested with" table must be one tested-versions.json lists (the list
+// /skin check uses to say "untested"), so the table and the check can never disagree.
+test('every Claude version in the README "Tested with" table is in tested-versions.json', { skip: !docs && 'no public docs here' }, () => {
+  const raw = readFileSync(path.join(docs, 'README.md'), 'utf8')
+  const table = raw.slice(raw.indexOf('## Tested with'), raw.indexOf('## Known limits'))
+  const rows = [...table.matchAll(/^\| (\d+\.\d+\.\d+) \|/gm)].map((m) => m[1])
+  assert.ok(rows.length >= 5, 'the table rows are found')
+  const listed = JSON.parse(readFileSync(path.join(tool, 'tested-versions.json'), 'utf8')).versions
+  for (const v of rows) assert.ok(listed.includes(v), `${v} is in the README table but not in tested-versions.json`)
+})

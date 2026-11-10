@@ -1007,7 +1007,7 @@ test('status with no helper: a type-only preference gets its own reapply offer, 
     // The no-skin tick (4 Nov 2026): no skin is needed to bring the headers back.
     assert.match(on.out, /^Reapply the project headers\? Run: \/skin type on --tick \(or: node skin-auto\.mjs tick off\); .*puts no skin on, and brings back the project headers\.$/m)
     writePrivateJson(nodeFs, dir, 'prefs.json', { v: 1, last: null, type: false, font: 'plex' }, randomUUID)
-    assert.match((await cli(dir, 'status')).out, /^Reapply the font plex\? Run: \/skin fonts --tick /m)
+    assert.match((await cli(dir, 'status')).out, /^Reapply your fonts \(Everything else: IBM Plex Sans\)\? Run: \/skin fonts --tick /m)
     writePrivateJson(nodeFs, dir, 'prefs.json', { v: 1, last: null, type: true }, randomUUID)
     assert.match((await cli(dir, 'check')).out, /^Reapply the project headers\? /m) // the health check offers the same
     writePrivateJson(nodeFs, dir, 'prefs.json', { v: 1, last: null, type: false }, randomUUID)

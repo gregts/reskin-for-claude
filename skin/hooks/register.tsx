@@ -6,13 +6,26 @@ import { SECTIONS, allPicks, defaultPicks, fontOptions, lookInfoOf, noLookText, 
 import type { SectionId } from './fonts'
 import { APPEND_SH, BoundedText, Capture, ENTRY_MAX_BYTES, LOG_DIR, LOG_FILE, LOG_MAX_BYTES, Milestones, appearanceOf, formatEntry, logView, macModeOf, portOf } from './log'
 import type { LogRecord, PortState, Step } from './log'
-import { ABOUT, CARD, RING_SIZE, cardFacts, cardParagraph, planOf, startResult, startStatus, startSummary, countdownSvg, displayName, listText, modeOf, noHelper, nodeCandidates, nodeMajorOk, isSkinName, parse, skinSuggestions, oneClickOf, fontsOf, argumentHintOf, summary, toolDirCandidates } from './logic'
+import { ABOUT, CARD, RING_SIZE, cardFacts, cardParagraph, planOf, startResult, startStatus, startSummary, countdownSvg, displayName, listText, modeOf, noHelper, nodeCandidates, nodeMajorOk, isSkinName, parse, skinSuggestions, oneClickOf, fontsOf, argumentHintOf, summary, toolDirCandidates, retiredText } from './logic'
 import type { Preset } from './logic'
+import { BAND0, FONTS_OPENER, LOCK_WAIT_ARG, LOCK_WAIT_MS, NO_PROOF, OWN_WORK_WAIT_MS, PROOF_TTL_MS, SIDEBAR_OPENER, SIDEBAR_OPTIONS, SKINS_OPENER, STILL_FINISHING, OPENER_LABELS, SHORT_SETUP_BELOW, actionOf, bandStatusOf, bandWord, chipsOf, proofOf, rowState, skinLabel, skinOptions, sidebarDone } from './band'
+import type { Band, BandRow, NowOn, Proof, RowId } from './band'
 
 // The tick card above the prompt (null when no run waits for a click).
 const card = atom({ plugin: 'skin', key: 'card' } as const, null as TickCard | null)
 // The fonts card (4 Nov 2026), null when closed.
 const fontsCard = atom({ plugin: 'skin', key: 'fontsCard' } as const, null as FontsCard | null)
+// The appearance band (5 Nov 2026): on or off, the open Skins or Sidebar row, and what the openers may claim.
+const band = atom({ plugin: 'skin', key: 'band' } as const, BAND0 as Band)
+// Band (5 Nov 2026): work the mod stopped waiting for (a change at its soft limit, a read at its deadline), still being
+// drained to its end. A tick waits for it, and for a running band operation, first (the tool's lock guards every run).
+const tails = new Set<Promise<void>>()
+let expiry: { cancel: () => void } | undefined
+// The preset names, cached for the Skins dropdown (read when a row opens).
+let presetNames: string[] = []
+// A change the mod stopped waiting for: it keeps running in the tool, and its answer is not known yet.
+class StillFinishing extends Error {}
+const LONG_WAIT_MS = 60_000 // after the soft limit: the never-expected last resort before the mod ends the child
 const ACCENT = '#d97757'
 const DIM = '#8a8f98'
 // The tool's tick window (TICK.windowMs in skin-lib.mjs), counted from READY_TO_TICK.
@@ -22,7 +35,9 @@ const TICK_WINDOW_S = 60
 let isRunning = false
 // Set when the band actually drew the tick card. Where no band is drawn (a surface without one), the status line under
 // the prompt carries the instruction instead, so it is never shown twice.
-let cardDrawn = false
+let cardDrawn = 0 // the run number of the card the band last drew (0: none)
+// The newest tick run's number: its card and timers carry it.
+let cardRun = 0
 // The longest a run may take: preparation, the 60 s tick window, the apply and cleanup (the tool stops itself at 150 s).
 const RUN_LIMIT_MS = 180_000
 // A tick that also carries font and type parts (a combined line): the tool allows itself 210 s (TICK.runLimitWantsMs).
@@ -71,7 +86,8 @@ async function resolveEnv($: EngineInterface, options: Readonly<Record<string, u
 
 async function presets($: EngineInterface, tool: string): Promise<Preset[]> {
   const entries = await $.fs.list(`${tool}/presets`)
-  const names = entries.filter(e => e.kind === 'file' && e.name.endsWith('.css')).map(e => e.name.slice(0, -4)).sort()
+  // A retired skin's leftover file (verc.css from an older copy) is never listed or applied.
+  const names = entries.filter(e => e.kind === 'file' && e.name.endsWith('.css')).map(e => e.name.slice(0, -4)).filter(n => retiredText(n) === null).sort()
   const out: Preset[] = []
   for (const name of names) {
     const css = await $.fs.read(`${tool}/presets/${name}.css`).catch(() => '')
@@ -95,7 +111,7 @@ async function lookUpNames($: EngineInterface): Promise<string[]> {
   let fonts = false
   for (const dir of toolDirCandidates(typeof currentOptions.toolDir === 'string' ? currentOptions.toolDir : undefined, $.plugin.root)) {
     const entries = await $.fs.list(`${dir}/presets`).catch(() => [])
-    list = entries.filter(x => x.kind === 'file' && x.name.endsWith('.css')).map(x => x.name.slice(0, -4)).filter(isSkinName).sort()
+    list = entries.filter(x => x.kind === 'file' && x.name.endsWith('.css')).map(x => x.name.slice(0, -4)).filter(n => isSkinName(n) && retiredText(n) === null).sort()
     if (list.length > 0) {
       // The tool's own release switch decides whether --one-click is offered (a tick-only release refuses it anyway).
       const there = await $.fs.exists(`${dir}/release.json`).catch(() => null)
@@ -118,40 +134,63 @@ async function macMode($: EngineInterface): Promise<'dark' | 'light' | 'unknown'
 }
 
 // Quick runs (switch, status): no waiting on the user. Streamed like the tick runs, so the log has the time each line came.
-async function quick($: EngineInterface, env: Env, args: string[], steps: Steps, via = viaOf(args[0] ?? ''), limitMs = QUICK_LIMIT_MS): Promise<Run> {
+// Band (5 Nov 2026): every helper verb the mod starts waits for the tool's run lock (--lock-wait), and that
+// wait is added to its limit. At the (soft) limit the mod stops waiting and says the change is still finishing, but it
+// never ends the child for being slow: the output keeps being drained in the background (a tracked tail) until the tool
+// ends by itself. Only a never-expected LONG_WAIT_MS later is the child ended, as the last resort it always was.
+const HELPER_VERBS = new Set(['switch', 'status', 'check', 'type', 'font', 'set', 'look'])
+async function quick($: EngineInterface, env: Env, args: string[], steps: Steps, via = viaOf(args[0] ?? ''), limitMs = QUICK_LIMIT_MS, opts: { lockWait?: boolean } = {}): Promise<Run> {
   const t = nowOf($)
-  const argv = [...env.node, `${env.tool}/skin-auto.mjs`, ...args]
+  const waits = (opts.lockWait ?? true) && HELPER_VERBS.has(args[0] ?? '')
+  const argv = [...env.node, `${env.tool}/skin-auto.mjs`, ...args, ...(waits ? [LOCK_WAIT_ARG] : [])]
+  const softMs = limitMs + (waits ? LOCK_WAIT_MS : 0)
   const out = new Capture()
   const marks = new Milestones()
   const stdout = new BoundedText()
   const stderr = new BoundedText()
+  // After the soft limit: the rest of the output, for the late log entry.
+  const lateOut = new Capture()
+  const lateText = new BoundedText()
   let exitCode: number | null = null
   let cut = false
   const child = $.process.spawn({ argv, env: TOOL_ENV })
   let timeUp = () => {}
   const limit = new Promise<'cut'>(r => { timeUp = () => r('cut') })
   let timer: { cancel: () => void } | undefined
-  try { timer = $.clock.after(limitMs, () => { cut = true; timeUp(); void child.return(undefined as never).catch(() => {}) }) } catch {}
-  const read = async (): Promise<'done'> => {
-    for await (const { stream, text } of child) {
-      if (cut) break
+  try { timer = $.clock.after(softMs, () => { cut = true; timeUp() }) } catch {}
+  // The whole run, process result included, sits inside the race: the mod never waits on it unbounded.
+  // The process result is waited for even when the stream itself fails, so the child's
+  // end is always what `work` (and a tail made from it) waits for.
+  const work = (async () => {
+    try { for await (const { stream, text } of child) {
+      // After the soft limit the rest is drained, not kept (the answer was already given), and the loop is never left
+      // early: leaving it would end the child.
+      if (cut) { lateOut.add(nowOf($) - t, stream === 'stderr' ? 'stderr' : 'stdout', text); if (stream !== 'stderr') lateText.add(text); continue }
       out.add(nowOf($) - t, stream === 'stderr' ? 'stderr' : 'stdout', text)
       marks.feed(stream === 'stderr' ? 'stderr' : 'stdout', text)
       if (stream === 'stderr') stderr.add(text)
       else stdout.add(text)
-    }
-    return 'done'
-  }
+    } } catch (err) { out.add(nowOf($) - t, 'stderr', `\nthe output stream failed: ${(err as Error).message}\n`) }
+    return await child.result.catch(() => ({ code: null, signal: null as string | null }))
+  })()
   try {
-    if (await Promise.race([read(), limit]) === 'cut') throw new Error(`the tool did not answer within ${limitMs / 1000} s`)
-    const res = await child.result.catch(() => ({ code: null, signal: null as string | null }))
+    const res = await Promise.race([work, limit])
+    if (res === 'cut') {
+      let last: { cancel: () => void } | undefined
+      try { last = $.clock.after(LONG_WAIT_MS, () => { void child.return(undefined as never).catch(() => {}) }) } catch {}
+      const tail: Promise<void> = work.then(res => lateDone($, env, argv, via, t, lateOut.finish(), lateText.cleaned(), res.code), () => lateDone($, env, argv, via, t, lateOut.finish(), lateText.cleaned(), null))
+        .finally(() => { last?.cancel(); tails.delete(tail) })
+      tails.add(tail)
+      out.add(nowOf($) - t, 'stderr', `\n/skin stopped waiting after ${softMs / 1000} s; the tool keeps running until it ends by itself\n`)
+      throw new StillFinishing('Reskin is still finishing that change. /skin status shows the result in a moment.')
+    }
     const sig = ended(res)
     if (sig) { out.add(nowOf($) - t, 'stderr', `\n${sig}\n`); marks.add(sig) }
     exitCode = res.code
     // The answer is built from cleaned text, so the chat (and the log of it) never shows a secret the tool printed.
     return { exitCode: res.code ?? 1, stdout: stdout.cleaned(), stderr: stderr.cleaned() }
   } catch (err) {
-    out.add(nowOf($) - t, 'stderr', `\ncould not run: ${(err as Error).message}\n`)
+    if (!(err instanceof StillFinishing)) out.add(nowOf($) - t, 'stderr', `\ncould not run: ${(err as Error).message}\n`)
     throw err
   } finally {
     timer?.cancel()
@@ -159,10 +198,46 @@ async function quick($: EngineInterface, env: Env, args: string[], steps: Steps,
   }
 }
 
+// A change the mod stopped waiting for has ended: its own log entry with the rest of its output, a short toast with its
+// outcome, and the band's claims read again. Read-only runs (look show, status, check) just end.
+function lateDone($: EngineInterface, env: Env, argv: string[], via: string, t0: number, output: string, stdout: string, code: number | null) {
+  const args = argv.slice(env.node.length + 1)
+  if (args[0] === 'status' || args[0] === 'check' || (args[0] === 'look' && args[1] === 'show')) return
+  const result = resultOf(stdout, code ?? 1)
+  const line = bandStatusOf(stdout, '', code ?? 1)
+  try { $.ui.toast(`Reskin finished the earlier change (${result}): ${line}`, { timeoutMs: 12_000 }) } catch {}
+  void writeLog($, {
+    command: `(finished after /skin stopped waiting) ${args.filter(a => !a.startsWith('--lock-wait')).join(' ')}`, tool: env.tool, preset: null,
+    steps: [{ argv, via, exitCode: code, ms: nowOf($) - t0, output, marks: '' }], shown: line, result, exitCode: code, t0, ms: nowOf($) - t0,
+    portBefore: Promise.resolve('unknown' as PortState), portAfter: portNow($), portAfterFrom: 'checked as the run ended',
+  })
+  void readIfShown($)
+}
+
+// Before a tick: the mod's own earlier work (a proof read, a change still finishing) must have ended, waited for up to
+// OWN_WORK_WAIT_MS. A tick never gets --lock-wait (the tool's tick budget starts when its process starts).
+async function ownWorkDone($: EngineInterface, ownOp = false): Promise<boolean> {
+  // ownOp: the tick IS the band's operation (its setup button): it does not wait for itself. The set is looked at again
+  // after each wait (work can hand over to new work), all within one deadline.
+  const now = () => [...tails, ...(op && !ownOp ? [op] : [])]
+  let t: { cancel: () => void } | undefined
+  let expired = false
+  const late = new Promise<void>(r => { try { t = $.clock.after(OWN_WORK_WAIT_MS, () => { expired = true; r() }) } catch { expired = true; r() } })
+  try {
+    for (;;) {
+      const all = now()
+      if (all.length === 0) return true
+      await Promise.race([Promise.allSettled(all), late])
+      if (expired) return now().length === 0
+    }
+  } finally { t?.cancel() }
+}
+
 // Runs that may wait for the user's tick: the output is streamed, so the tick prompt shows the moment the tool is ready
 // (it prints READY_TO_TICK only after every check passed and its safety nets are running), together with the tool's own
 // disclosure (what may appear, the debugger, the colour helper). One-click runs print DISCLOSED before their scripted tick.
-async function streamed($: EngineInterface, env: Env, args: string[], steps: Steps, limitMs = RUN_LIMIT_MS): Promise<Run> {
+async function streamed($: EngineInterface, env: Env, args: string[], steps: Steps, limitMs = RUN_LIMIT_MS, ownOp = false): Promise<Run> {
+  if (!(await ownWorkDone($, ownOp))) throw new StillFinishing(STILL_FINISHING)
   // The skin is the first plain word after the verb (a combined line adds --want-* options after it).
   const skin = args.slice(1).find(a => !a.startsWith('--')) ?? ''
   const t0 = nowOf($)
@@ -172,6 +247,11 @@ async function streamed($: EngineInterface, env: Env, args: string[], steps: Ste
   const argv = [...env.node, `${env.tool}/skin-auto.mjs`, ...args]
   let countdown: { cancel: () => void } | undefined
   let fallback: { cancel: () => void } | undefined
+  // This run's own card: every card write and timer checks, inside its callback, that this
+  // run is still the newest and still live, so a run that timed out can never put its card back over a newer one.
+  const myRun = ++cardRun
+  let live = true
+  const mine = () => live && cardRun === myRun
   const child = $.process.spawn({ argv, env: TOOL_ENV })
   const stdout = new BoundedText()
   const stderr = new BoundedText()
@@ -181,7 +261,7 @@ async function streamed($: EngineInterface, env: Env, args: string[], steps: Ste
   // end (the tool's own guardian still closes the port).
   let timeUp = () => {}
   const limit = new Promise<'cut'>(r => { timeUp = () => r('cut') })
-  const timer = $.clock.after(limitMs, () => { cut = true; timeUp(); void child.return(undefined as never).catch(() => {}) })
+  const timer = $.clock.after(limitMs, () => { cut = true; live = false; timeUp(); void child.return(undefined as never).catch(() => {}) })
   const disclosure = (marker: string) => {
     const all = stdout.text
     const lines = all.slice(0, all.indexOf(marker)).split('\n').map(l => l.trim())
@@ -202,31 +282,38 @@ async function streamed($: EngineInterface, env: Env, args: string[], steps: Ste
       const seenOpen = stdout.newly('debugger port seen')
       if (ready) {
         // The card carries the tool's disclosure in short; the status line stays as a one-line fallback.
-        // The no-skin tick's PLAN line is read from the whole output as well (design v3 [r2-1]), never only the disclosure.
+        // The no-skin tick's PLAN line is read from the whole output as well, never only the disclosure.
         const facts = cardFacts(disclosure('READY_TO_TICK'))
         const whole = planOf(stdout.text)
         const facts2 = whole === null ? facts : { ...facts, start: true, plan: whole }
         starting = facts2.start
-        await update($, card, () => ({ skin, left: TICK_WINDOW_S, phase: 'wait', nudged: false, ...facts2 }))
-        countdown = $.clock.every(1_000, () => { void update($, card, c => c === null || c.phase !== 'wait' ? c : { ...c, left: Math.max(0, c.left - 1) }) })
-        cardDrawn = false
-        fallback = $.clock.after(1_500, () => { if (!cardDrawn) $.ui.status(facts2.start ? startStatus(facts2.plan, TICK_WINDOW_S) : `Reskin: click Developer > Enable Main Process Debugger once (${TICK_WINDOW_S} s)`) })
+        await update($, card, c => (mine() ? { skin, left: TICK_WINDOW_S, phase: 'wait', nudged: false, run: myRun, ...facts2 } : c))
+        // Never leave the loop early (that would end the child): a run that is no longer live just starts no timers.
+        if (mine()) countdown = $.clock.every(1_000, () => { void update($, card, c => !mine() || c === null || c.run !== myRun || c.phase !== 'wait' ? c : { ...c, left: Math.max(0, c.left - 1) }) })
+        if (mine()) cardDrawn = 0
+        if (mine()) fallback = $.clock.after(1_500, () => { if (mine() && cardDrawn !== myRun) $.ui.status(facts2.start ? startStatus(facts2.plan, TICK_WINDOW_S) : `Reskin: click Developer > Enable Main Process Debugger once (${TICK_WINDOW_S} s)`) })
       }
-      if (nudge) await update($, card, c => c === null ? c : { ...c, nudged: true })
+      if (nudge) await update($, card, c => !mine() || c === null || c.run !== myRun ? c : { ...c, nudged: true })
       if (disclosed) $.ui.toast(disclosure('DISCLOSED'), { timeoutMs: 15_000 })
       if (seenOpen) {
-        await update($, card, c => c === null ? c : { ...c, phase: 'applying' as const })
-        if (!cardDrawn) $.ui.status(starting ? 'Reskin: starting the colour helper, stop clicking' : 'Reskin: applying, stop clicking')
+        await update($, card, c => !mine() || c === null || c.run !== myRun ? c : { ...c, phase: 'applying' as const })
+        if (mine() && cardDrawn !== myRun) $.ui.status(starting ? 'Reskin: starting the colour helper, stop clicking' : 'Reskin: applying, stop clicking')
       }
     }
     return 'done'
   }
   try {
-    const how = await Promise.race([read(), limit])
+    // The run's limit covers the process result too.
+    // The result is waited for even when the stream fails.
+    const rd = read().catch(() => 'done' as const).then(() => child.result.catch(() => ({ code: null, signal: null as string | null })))
+    const how = await Promise.race([rd, limit])
     if (how === 'cut') {
-      return { exitCode: 4, stdout: stdout.cleaned(), stderr: `${stderr.cleaned()}\nStopped by /skin after ${limitMs / 1000} s. If the debugger may still be open, untick Developer > Enable Main Process Debugger.` }
+      // The child was asked to end; until it has, it is tracked like any work the mod stopped waiting for.
+      const tail: Promise<void> = rd.then(() => {}, () => {}).finally(() => { tails.delete(tail) })
+      tails.add(tail)
+      return { exitCode: 4, stdout: stdout.cleaned(), stderr: `${stderr.cleaned()}\nStopped by /skin after ${limitMs / 1000} s. If the debugger may still be open, quit and reopen Claude (Cmd+Q, then open it again).` }
     }
-    const res = await child.result.catch(() => ({ code: null, signal: null as string | null }))
+    const res = how
     const sig = ended(res)
     if (sig) { out.add(nowOf($) - t0, 'stderr', `\n${sig}\n`); marks.add(sig) }
     exitCode = res.code
@@ -238,22 +325,27 @@ async function streamed($: EngineInterface, env: Env, args: string[], steps: Ste
     const ms = nowOf($) - t0
     const tail = cut ? `\n[+${(ms / 1000).toFixed(3)}s] /skin stopped waiting after ${limitMs / 1000} s` : ''
     steps.push({ argv, via: viaOf(args[0] ?? ''), exitCode, ms, output: out.finish() + tail, marks: marks.list().join('\n') })
-    await update($, card, () => null)
-    $.ui.status(undefined)
+    live = false
+    // Only this run's card goes, and the status line only if no newer run owns it.
+    await update($, card, c => (c !== null && c.run !== undefined && c.run !== myRun ? c : null))
+    if (cardRun === myRun) $.ui.status(undefined)
   }
 }
 
 export const register: Register = (on, options) => {
   currentOptions = options ?? {}
-  // The tick card: only while a tick run waits. Other plugins' bands (usage-line) still draw beneath it.
+  // The tick card: only while a tick run waits. Other plugins' bands still draw beneath it.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const c = await read($, card)
     if (e.props.hasSurvey) return next(e)
     if (c === null) {
       const f = await read($, fontsCard)
-      return f === null ? next(e) : drawFonts($, e, next, f)
+      const b = await read($, band)
+      // The band on: its two lines (openers, then the open row). Off: only an open row, in the look it had before.
+      if (b.on || b.row !== null || f !== null) return drawBand($, e, next, b, f)
+      return next(e)
     }
-    cardDrawn = true
+    cardDrawn = c.run ?? 0
     // Claude Code's own placeholder ({ type: 'engine' }) is never nested: the desktop drops a band that nests it.
     const drawn = await Promise.resolve(next(e)).catch(() => null)
     const below = drawn !== null && typeof drawn === 'object' && (drawn as { type?: string }).type !== 'engine' ? drawn : null
@@ -293,14 +385,25 @@ export const register: Register = (on, options) => {
 
   // The fonts card's buttons: the work runs here, with this hook's own engine interface (the buttons' closures do nothing).
   on('ui.press', async ($, e, next) => {
-    // An opener any band mod may draw (a Button keyed skin-fonts-open, documented in the README): it opens the fonts card
-    // at once, mid-turn too, and prints nothing in the chat (a command run by a mod would wait until Claude is idle).
-    if (e.element === FONTS_OPENER) { await openFromButton($); return next(e) }
+    // An opener any band mod may draw (keyed skin-fonts-open, skin-skins-open, skin-sidebar-open, documented in the
+    // README): it opens its row at once, mid-turn too, and prints nothing in the chat. The press is passed on first, then
+    // the row opens: opening redraws the band, and a press passed on after that would find its drawing gone (the
+    // opener's own onPress does nothing).
+    // Busy (an operation or a /skin run): refused at once with a note, before anything else.
+    const opener = e.element === FONTS_OPENER || e.element === SKINS_OPENER || e.element === SIDEBAR_OPENER
+    if (opener && !freeNow()) { toast($, BUSY_NOTE); return next(e) }
+    if (e.element === FONTS_OPENER) { const r = await next(e); await openFromButton($); return r }
+    if (e.element === SKINS_OPENER || e.element === SIDEBAR_OPENER) { const r = await next(e); await openRow($, e.element === SKINS_OPENER ? 'skins' : 'sidebar'); return r }
+    // Every row button acts only when it is Reskin's own.
     if (e.plugin !== 'skin') return next(e)
-    if (e.element === 'skin-fonts-close') {
-      await update($, fontsCard, () => null)
+    if (e.element === 'skin-band-close') await closeRow($, 'band')
+    else if (e.element === 'skin-band-apply') await bandAction($, 'band', 'apply')
+    else if (e.element === 'skin-band-reset') await bandAction($, 'band', 'reset')
+    else if (e.element === 'skin-band-setup') await bandAction($, 'band', 'setup')
+    else if (e.element === 'skin-fonts-setup') await bandAction($, 'fonts', 'setup')
+    else if (e.element === 'skin-fonts-close') {
       // Once per Claude session: how to get the row back (the card itself is gone now).
-      if (!closeHintShown) { closeHintShown = true; $.ui.toast('Fonts closed. /skin fonts brings them back.', { timeoutMs: 6_000 }) }
+      if ((await closeRow($, 'fonts')) === 'closed' && !closeHintShown) { closeHintShown = true; toast($, 'Fonts closed. /skin fonts brings them back.', 6_000) }
     }
     else if (e.element === 'skin-fonts-apply') await applyFonts($, false)
     else if (e.element === 'skin-fonts-reset') await applyFonts($, true)
@@ -319,17 +422,24 @@ export const register: Register = (on, options) => {
     try {
       await $.command.register({
         name: 'skin',
-        description: 'Recolour the whole Claude app: /skin <name>, /skin off, /skin remove, /skin status, /skin check, /skin type on|off, /skin type on --tick (no skin), /skin list, /skin log, /skin about',
+        description: 'Recolour the whole Claude app: /skin <name>, /skin off, /skin remove, /skin status, /skin check, /skin type on|off, /skin type on --tick (no skin), /skin band on|off, /skin list, /skin log, /skin about',
         argumentHint: argumentHintOf((await skinNames($), oneClickNow), fontsNow),
       })
     } catch {
       $.ui.status('Reskin: /skin is taken by another plugin. Disable one of them to use Reskin.')
     }
+    // The appearance band, if it was left on: drawn at once with plain words, its claims read in the background.
+    await restoreBand($)
     return next(e)
   })
 
   on('command.run', { command: 'skin' }, async ($, e) => {
-    const parsed = parse(e.args, (await skinNames($), oneClickNow))
+    // The appearance band (5 Nov 2026): /skin band on|off, remembered. Changes nothing in Claude's look.
+    const bw = bandWord(e.args)
+    if (bw === 'bad') return { text: 'Use /skin band on or /skin band off.' }
+    if (bw !== null) return { text: await setBand($, bw) }
+    // Bounded: a slow folder read never holds a typed command; the last list is used then.
+    const parsed = parse(e.args, (await within($, skinNames($), names?.list ?? [], 10_000), oneClickNow))
     if (parsed.kind === 'about') return { text: ABOUT }
     if (parsed.kind === 'log') return { text: await showLog($) }
     // Every other /skin run leaves one entry in the log, whatever happens.
@@ -341,10 +451,12 @@ export const register: Register = (on, options) => {
     let tool = 'not looked up'
     let answer: { text: string; result: string }
     try {
-      answer = await handle($, parsed, steps, (t: string) => { tool = t }, (p: LogRecord['preset']) => { preset = p })
+      answer = await handle($, parsed, steps, (x: string) => { tool = x }, (p: LogRecord['preset']) => { preset = p })
     } catch (err) {
-      answer = { text: `The skin step did not finish: ${(err as Error).message}`, result: 'failed' }
+      answer = { text: err instanceof StillFinishing ? err.message : `The skin step did not finish: ${(err as Error).message}`, result: 'failed' }
     }
+    // The band's claims were cleared when the change started; read them again now it has ended.
+    if (changes(parsed.kind)) void readIfShown($)
     // The answer never waits for the log: the entry is written after it, in the background. What the run itself decides
     // is fixed now: its duration, the tool's own last port check, and a port check started as it ends.
     const ms = nowOf($) - t0
@@ -361,16 +473,378 @@ export const register: Register = (on, options) => {
 type Found = (tool: string) => void
 type Chosen = (p: LogRecord['preset']) => void
 const said = (text: string, result: string) => ({ text, result })
+// The /skin runs that may change what Claude looks like.
+const changes = (kind: string) => ['apply', 'off', 'remove', 'type', 'font', 'set', 'start'].includes(kind)
+
+// ---- The appearance band (5 Nov 2026), one operation at a time ----
+// The rule: at most ONE band operation runs at a time (`op`): opening a row (with its read of what is on), Apply, Reset,
+// setup, and the proof read the mod starts by itself. A press while one runs, or while a /skin run holds the run guard,
+// changes nothing and says so in a short note. A typed /skin command waits for a running band operation (up to
+// OP_WAIT_MS) before it takes the run guard, so it is never refused because of the band. Closing a row and the dropdowns
+// change the atom in one synchronous update each and are ignored while an operation runs. Nothing about the band ever
+// overlaps, so no answer can arrive for a row or a proof that changed meanwhile.
+let op: Promise<void> | null = null
+const OP_WAIT_MS = 20_000
+const BUSY_NOTE = 'Reskin is busy with another step. Try again in a moment.'
+const toast = ($: EngineInterface, text: string, ms = 5_000) => { try { $.ui.toast(text, { timeoutMs: ms }) } catch {} }
+// Every lookup inside an operation has a time limit, so an operation always ends.
+const LOOKUP_MS = 10_000
+const envIn = ($: EngineInterface) => within($, resolveEnv($, currentOptions), 'Reskin could not find its tool in time. Try again.', LOOKUP_MS)
+const presetsIn = ($: EngineInterface, tool: string) => within($, presets($, tool).catch(() => [] as Preset[]), [] as Preset[], LOOKUP_MS)
+// Free right now for a press (no operation, no /skin run): checked before anything else a press does.
+const freeNow = () => op === null && !isRunning
+let fontsOpenSeq = 0
+// Runs `fn` as the band's one operation, or refuses at once (the run guard or another operation): never waits.
+// ownRun: the caller is a typed /skin run that holds the run guard itself (its own /skin fonts off), so only `op` counts.
+function runOp($: EngineInterface, fn: () => Promise<void>, quiet = false, ownRun = false): Promise<boolean> {
+  if (op !== null || (isRunning && !ownRun)) { if (!quiet) toast($, BUSY_NOTE); return Promise.resolve(false) }
+  // True only when the operation finished without an error; admission alone is not success.
+  // A failure in an operation the user started always shows a note; the mod's own reads stay quiet.
+  let ok = true
+  const p = fn().catch((err) => { ok = false; if (!quiet) toast($, `That step could not finish (${String((err as Error)?.message ?? err).slice(0, 80)}). Try again.`, 8_000) }).finally(() => { if (op === p) op = null })
+  op = p
+  return p.then(() => ok)
+}
+// For a typed /skin command: waits for the band's operation to end (bounded). True when none is running now.
+// One operation can hand over to the next (band on, then its read): the current one is looked at again after each wait,
+// all within one deadline.
+async function waitOp($: EngineInterface): Promise<boolean> {
+  if (op === null) return true
+  let t: { cancel: () => void } | undefined
+  let expired = false
+  const late = new Promise<void>(r => { try { t = $.clock.after(OP_WAIT_MS, () => { expired = true; r() }) } catch { expired = true; r() } })
+  try {
+    while (op !== null && !expired) await Promise.race([op, late])
+    return op === null
+  } finally { t?.cancel() }
+}
+
+// /skin band on|off, remembered: an operation like any other (waited for, as for any typed command), so it never
+// overlaps a row opening or an Apply, and two of them apply in order.
+async function setBand($: EngineInterface, on: boolean): Promise<string> {
+  if (!(await waitOp($)) || isRunning) return BUSY_NOTE
+  const ran = await runOp($, async () => {
+    await saveBand($, on)
+    if (on) { await update($, band, b => ({ ...b, on: true })); return }
+    // Off: the rows close too (no operation is running now, so none is busy). The claims keep their own expiry.
+    await update($, band, b => ({ ...b, on: false, row: null, rowId: b.rowId + 1 }))
+    await update($, fontsCard, () => null)
+  })
+  if (!ran) return op !== null || isRunning ? BUSY_NOTE : 'The band could not be changed just now. Try again.'
+  if (!on) return 'Appearance band off. /skin band on brings it back; /skin fonts still opens the fonts row.'
+  void readProof($, true)
+  return 'Appearance band on: Skins, Fonts and Sidebar above the message box. Press one to open its row; nothing changes until you press Apply. /skin band off hides it.'
+}
+// The remembered on/off: writes go one after another in the order asked, so a slow older write can never land after a
+// newer one. The command does not wait more than LOOKUP_MS for it.
+let storeChain: Promise<unknown> = Promise.resolve()
+function saveBand($: EngineInterface, on: boolean): Promise<unknown> {
+  const p = storeChain.then(() => $.store.set('band', on)).catch(() => {})
+  storeChain = p
+  return within($, p.then(() => true), false, LOOKUP_MS)
+}
+// The band left on in an earlier session: drawn at once with plain words, its claims read in the background.
+async function restoreBand($: EngineInterface) {
+  let on = false
+  await runOp($, async () => {
+    on = (await within($, $.store.get('band').catch(() => undefined), undefined, LOOKUP_MS)) === true
+    if (on) await update($, band, b => ({ ...b, on: true }))
+  }, true)
+  if (on) void readProof($, false)
+}
+// A /skin run that may change the look starts: the claims go at once. (Runs and band operations never overlap.)
+async function clearClaims($: EngineInterface) {
+  await update($, band, b => ({ ...b, gen: b.gen + 1, proof: null, now: null }))
+}
+// After a change: a fresh read, if the band or one of its rows is showing (the fonts row shows what its own Apply proved).
+async function readIfShown($: EngineInterface) {
+  const b = await read($, band)
+  if (b.on || b.row !== null) await readProof($, false)
+}
+
+// The proof read (`look show`), as the band's operation (quiet: a read the mod starts by itself never shows a note).
+// lockWait: a read the user asked for waits for the tool's run lock like any command; one the mod starts does not.
+function readProof($: EngineInterface, lockWait: boolean): Promise<boolean> {
+  return runOp($, async () => { await applyProof($, await lookShow($, lockWait)) }, true)
+}
+// One `look show`, bounded (READ_WAIT_MS): its output, or null when it failed or ran out of time. Inside an operation only.
+const READ_WAIT_MS = 15_000
+async function lookShow($: EngineInterface, lockWait: boolean, steps: Steps = []): Promise<string | null> {
+  let out: string | null = null
+  const work = (async () => {
+    const env = await envIn($)
+    if (typeof env === 'string') return
+    out = (await quick($, env, ['look', 'show'], steps, 'band (colour helper)', QUICK_LIMIT_MS, { lockWait })).stdout
+  })().catch(() => {})
+  let t: { cancel: () => void } | undefined
+  const late = new Promise<'late'>(r => { try { t = $.clock.after(READ_WAIT_MS, () => r('late')) } catch { r('late') } })
+  const how = await Promise.race([work.then(() => 'done' as const), late]).finally(() => t?.cancel())
+  // Out of time: the answer is not used, and the work still under way is tracked like any
+  // work the mod stopped waiting for (a tick waits for it; the tool's lock keeps every other run behind it).
+  if (how === 'late') {
+    const tail: Promise<void> = work.finally(() => { tails.delete(tail) })
+    tails.add(tail)
+    return null
+  }
+  return out
+}
+// A read's answer (inside an operation): claims, the helper state for the rows, the open row's untouched dropdowns, and
+// "Checking…" ends. A failed read claims nothing. Expires PROOF_TTL_MS later.
+let latestProofId = 0
+async function applyProof($: EngineInterface, stdout: string | null) {
+  const proof = stdout === null ? NO_PROOF : proofOf(stdout)
+  let id = 0
+  await update($, band, b => {
+    id = b.proofId + 1
+    const drafts = b.row === null || b.touched || b.busy ? b.drafts : {
+      skin: proof.skin === 'unknown' ? b.drafts.skin : proof.skin,
+      sidebar: proof.sidebar === 'unknown' ? b.drafts.sidebar : proof.sidebar,
+    }
+    return { ...b, proof, proofId: id, helper: proof.helper, drafts, checking: 0 }
+  })
+  latestProofId = id
+  expiry?.cancel()
+  try { expiry = $.clock.after(PROOF_TTL_MS, () => { void update($, band, b => (b.proofId === id ? { ...b, proof: null, now: null } : b)) }) } catch {}
+}
+
+// ---- Rows ----
+// An opener's press toggles its row: open when closed (the other rows close: one row at a time), closed when open. The
+// whole decision is the operation: it looks at the rows only once admitted.
+async function openRow($: EngineInterface, row: BandRow) {
+  await runOp($, async () => {
+    const b = await read($, band)
+    if (b.row === row) { await update($, band, x => ({ ...x, row: null, rowId: x.rowId + 1 })); return }
+    const env = await envIn($)
+    if (typeof env !== 'string') presetNames = (await presetsIn($, env.tool)).map(p => p.name)
+    await update($, fontsCard, () => null)
+    await update($, band, x => ({
+      ...x, row, rowId: x.rowId + 1, touched: false, checking: 1, status: '', now: null,
+      drafts: x.proof === null ? x.drafts : { skin: x.proof.skin === 'unknown' ? x.drafts.skin : x.proof.skin, sidebar: x.proof.sidebar === 'unknown' ? x.drafts.sidebar : x.proof.sidebar },
+    }))
+    await applyProof($, await lookShow($, true))
+  })
+}
+
+// ✕ on a band row, ✕ on the fonts row, /skin fonts off: an operation too (refused with a note while one runs).
+// ownRun: typed /skin fonts off, which holds the run guard itself.
+async function closeRow($: EngineInterface, which: 'band' | 'fonts', ownRun = false): Promise<'none' | 'busy' | 'closed'> {
+  let r: 'none' | 'busy' | 'closed' = 'none'
+  const ran = await runOp($, async () => {
+    if (which === 'band') {
+      const b = await read($, band)
+      if (b.row === null) return
+      await update($, band, x => ({ ...x, row: null, rowId: x.rowId + 1 }))
+    } else {
+      if ((await read($, fontsCard)) === null) return
+      await update($, fontsCard, () => null)
+    }
+    r = 'closed'
+  }, false, ownRun)
+  return ran ? r : 'busy'
+}
+
+// The fonts row's content from one read (inside an operation or the run guard). Closes any band row (one row at a time).
+let closeHintShown = false
+async function installFonts($: EngineInterface, stdout: string | null, fromButton: boolean): Promise<{ helper: string; result: string }> {
+  await applyProof($, stdout)
+  const info = lookInfoOf(stdout ?? '')
+  const helper = info?.helper ?? 'unread'
+  const look = info?.look ?? null
+  await update($, band, x => (x.row === null || x.busy ? x : { ...x, row: null, rowId: x.rowId + 1 }))
+  await update($, fontsCard, () => ({ helper, look, section: 'all', picks: allPicks(look ?? []), busy: false, fromButton, openId: ++fontsOpenSeq,
+    status: helper !== 'active' ? '' : look === null ? 'The fonts that are on now could not be proven. Choose and apply, or run /skin font off first.' : '' }))
+  return { helper, result: stdout === null ? 'failed' : resultOf(stdout, 0) }
+}
+
+// The Fonts opener (any band mod may draw it): toggles the fonts row, prints nothing in the chat, logged. The whole
+// decision is the operation.
+async function openFromButton($: EngineInterface) {
+  const steps: Steps = []
+  const t0 = nowOf($)
+  const portBefore = portNow($)
+  let shown = '', result = 'failed'
+  await runOp($, async () => { try {
+    if (!fontsNow) await within($, skinNames($).catch(() => []), [], LOOKUP_MS) // the release switch is read with the presets
+    if (!fontsNow) { toast($, 'Fonts are not in this release.'); return }
+    if ((await read($, fontsCard)) !== null) { await update($, fontsCard, () => null); return }
+    const o = await installFonts($, await lookShow($, true, steps), true)
+    shown = o.helper === 'active' ? 'fonts card opened' : noLookText(o.helper)
+    result = o.result
+  } catch (err) { shown = `The fonts row could not be opened (${(err as Error).message}).`; throw err } })
+  if (steps.length > 0) {
+    const toolPort = [...(steps.at(-1)?.marks ?? '').matchAll(/PORT_STATE: (open|closed|unknown)$/gm)].at(-1)?.[1] as PortState | undefined
+    void writeLog($, {
+      command: '/skin fonts (opener button)', tool: 'see step', preset: null, steps, shown, result,
+      exitCode: steps.at(-1)?.exitCode ?? null, t0, ms: nowOf($) - t0, portBefore, portAfter: toolPort ?? portNow($), portAfterFrom: toolPort ? 'the tool\'s own last check' : 'checked as the run ended',
+    })
+  }
+}
+
+// ---- Actions: Apply, Reset, setup (band rows and the fonts row), each the band's one operation ----
+// The run guard is held too, so no typed /skin run starts meanwhile; the choices are read once, at the start, and the
+// dropdowns ignore picks until the operation ends.
+async function bandAction($: EngineInterface, which: 'band' | 'fonts', button: 'apply' | 'reset' | 'setup') {
+  await runOp($, async () => {
+    // The row is marked busy and its choices are read in ONE update: a dropdown pick lands either
+    // before it (and is what gets sent) or after it (and is ignored, the row being busy); never in between.
+    let b: Band = BAND0
+    let f: FontsCard | null = null
+    let claimed = false
+    if (which === 'band') await update($, band, x => { b = x; if (x.row === null || x.busy) return x; claimed = true; return { ...x, busy: true, status: 'Applying…', now: null } })
+    else {
+      b = await read($, band)
+      await update($, fontsCard, c => { f = c; if (c === null || c.busy) return c; claimed = true; return { ...c, busy: true, status: 'Applying…' } })
+    }
+    if (!claimed) return
+    const setStatus = (status: string, busy: boolean) => (which === 'fonts'
+      ? update($, fontsCard, c => (c === null ? c : { ...c, busy, status }))
+      : update($, band, x => ({ ...x, busy, status, ...(busy ? {} : { touched: false }) })))
+    const fc = f as FontsCard | null
+    const row: RowId = which === 'fonts' ? 'fonts' : b.row!
+    const helper = which === 'fonts' ? fc!.helper : b.helper
+    const act = actionOf(row, button, b.drafts)
+    if (act === null || (act.runner === 'tick' ? helper !== 'none' : helper !== 'active')) { await setStatus('', false); return }
+    isRunning = true
+    const steps: Steps = []
+    const t0 = nowOf($)
+    const portBefore = portNow($)
+    let shown = '', result = 'failed', toolDir = 'not looked up', shownFull = ''
+    let started = false
+    // The skin a Skins-row Apply or setup sends, for the log header (it said "none" before, 5 Nov 2026 live look).
+    let logPreset: LogRecord['preset'] = null
+    try {
+      await setStatus(act.runner === 'tick' ? 'Setting up: follow the card above.' : 'Applying…', true)
+      await clearClaims($)
+      const env = await envIn($)
+      if (typeof env === 'string') { shown = env; result = 'refused'; return }
+      toolDir = env.tool
+      const sent = row === 'skins' ? act.args[1] : undefined
+      if (sent !== undefined && sent !== 'off') {
+        const p = (await presetsIn($, env.tool)).find(x => x.name === sent)
+        logPreset = { name: sent, mode: p?.mode ?? 'unknown' }
+      }
+      if (act.runner === 'quick') {
+        const r = await quick($, env, act.args, steps, 'band (colour helper)', act.args[0] === 'type' ? SLOT_LIMIT_MS : QUICK_LIMIT_MS)
+        result = resultOf(r.stdout, r.exitCode)
+        shown = bandStatusOf(r.stdout, r.stderr, r.exitCode)
+        if (row === 'sidebar' && result === 'ok') { shownFull = shown; shown = sidebarDone(act.args[1] ?? 'on') }
+      } else {
+        const noSkin = act.args[1] === 'off'
+        const r = await streamed($, env, act.args, steps, act.args.some(a => a.startsWith('--want-')) ? START_WANTS_LIMIT_MS : noSkin ? START_LIMIT_MS : RUN_LIMIT_MS, true)
+        result = noSkin ? (startResult(r.stdout) ?? 'failed') : resultOf(r.stdout, r.exitCode)
+        const text = noSkin ? startSummary(r.exitCode, r.stdout, r.stderr) : summary(act.args[1] ?? '', r.exitCode, r.stdout, r.stderr)
+        shown = text.split('\n').map(l => l.trim()).find(l => l !== '') ?? (result === 'ok' ? 'Done.' : 'Did not finish.')
+        started = result === 'ok'
+        // A run that worked can still carry a safety warning (2.0: the debugger opened again after the run and was
+        // closed; the menu item may still show a tick). The whole answer is then shown as well, as after a failure.
+        const warned = text.split('\n').some(l => l.includes('WARNING:'))
+        if (result === 'ok' && warned) {
+          toast($, text, 60_000)
+          shown = `${shown} (with a warning: read the message above; /skin log has all of it)`
+        }
+        if (result !== 'ok') {
+          // The whole answer stays visible: a long toast with every line, and the
+          // status line under the prompt keeps the recovery step (never the tick instruction itself) until the next run.
+          const recovery = text.split('\n').map(l => l.trim()).find(l => l !== '' && !/^NOW:/i.test(l) && !/\bclick\b/i.test(l) && /untick|still (be )?open|quit and reopen/i.test(l))
+          const portBad = /^PORT_STATE: (open|unknown)$/m.test(r.stdout)
+          const urgent = recovery ?? (portBad ? 'the debugger port may still be open: quit and reopen Claude (Cmd+Q, then open it again).' : null)
+          toast($, text, 60_000)
+          if (urgent) { try { $.ui.status(`Reskin: ${urgent}`) } catch {} }
+          shown = `${shown} (details in the message above; /skin log has all of it)`
+        }
+        shownFull = text
+      }
+    } catch (err) {
+      shown = err instanceof StillFinishing ? err.message : `Did not finish: ${(err as Error).message}`
+    } finally {
+      isRunning = false
+      await setStatus(shown, false)
+      const toolPort = [...(steps.at(-1)?.marks ?? '').matchAll(/PORT_STATE: (open|closed|unknown)$/gm)].at(-1)?.[1] as PortState | undefined
+      void writeLog($, {
+        command: `/skin band (${row}: ${button})`, tool: toolDir, preset: logPreset, steps, shown: shownFull || shown, result,
+        exitCode: steps.at(-1)?.exitCode ?? null, t0, ms: nowOf($) - t0, portBefore, portAfter: toolPort ?? portNow($), portAfterFrom: toolPort ? 'the tool\'s own last check' : 'checked as the run ended',
+      })
+    }
+    // Still the same operation: the row shows what is on now (after a good setup on the fonts row, its fonts).
+    const stdout = await lookShow($, false)
+    if (row === 'fonts' && started && (await read($, fontsCard)) !== null) await installFonts($, stdout, fc?.fromButton ?? true)
+    else await applyProof($, stdout)
+    // Option C: an Apply the tool reported done AND this read proves (the same skin on now) says so by name, with six
+    // chips from the skin's own preset file. Anything less keeps the tool's own line.
+    const asked = act.args[1] ?? ''
+    if (which === 'band' && row === 'skins' && button === 'apply' && result === 'ok' && asked !== 'off' && stdout !== null && proofOf(stdout).skin === asked && toolDir !== 'not looked up') {
+      const css = await within($, $.fs.read(`${toolDir}/presets/${asked}.css`).catch(() => ''), '', LOOKUP_MS)
+      const chips = chipsOf(typeof css === 'string' ? css : '')
+      // Only with all six colours read: otherwise the tool's own line stays.
+      if (chips !== null) await update($, band, x => (x.row !== 'skins' || x.busy || x.touched || x.proof?.skin !== asked ? x : { ...x, status: '', now: { skin: asked, light: chips.light, dark: chips.dark } }))
+    }
+  })
+}
+
+// Apply (or "Claude's own") on the fonts row: one tool run, `look set`, through the colour helper only (no tick, no
+// port), as the band's one operation. Logged like every /skin run. The row then shows what the helper proved.
+async function applyFonts($: EngineInterface, reset: boolean) {
+  await runOp($, async () => {
+    // Busy and the choices in ONE update, as for the band's Apply.
+    let f: FontsCard | null = null
+    await update($, fontsCard, c => { if (c === null || c.busy || c.helper !== 'active') return c; f = c; return { ...c, busy: true, status: 'Applying…' } })
+    if (f === null) return
+    const fc: FontsCard = f
+    const id = fc.section as SectionId
+    const picks = reset ? defaultPicks(id) : fc.picks[id]
+    isRunning = true
+    const steps: Steps = []
+    const t0 = nowOf($)
+    const portBefore = portNow($)
+    let shown = '', result = 'failed', toolDir = 'not looked up', status = ''
+    let more: Partial<FontsCard> = {}
+    try {
+      await clearClaims($)
+      const env = await envIn($)
+      if (typeof env === 'string') { shown = env; status = env; result = 'refused'; return }
+      toolDir = env.tool
+      const r = await quick($, env, setArgs(id, picks), steps, 'fonts card (colour helper)', LOOK_LIMIT_MS)
+      const info = lookInfoOf(r.stdout)
+      shown = resultLineOf(r.stdout, r.stderr, r.exitCode)
+      result = resultOf(r.stdout, r.exitCode)
+      status = shortStatus(result, shown, reset, info !== null && info.look !== null)
+      if (info) {
+        const proved = info.look
+        more = { helper: info.helper, look: proved }
+        // The part just sent shows what the helper proved; the other parts keep their unsent choices (All parts changes
+        // every part's font, so then every part shows what was proved).
+        if (proved) more.picks = id === 'all' ? allPicks(proved) : { ...fc.picks, [id]: allPicks(proved)[id], all: allPicks(proved).all }
+      }
+    } catch (err) {
+      shown = err instanceof StillFinishing ? err.message : `The change did not finish: ${(err as Error).message}`
+      status = shown
+    } finally {
+      isRunning = false
+      await update($, fontsCard, c => (c === null ? c : { ...c, ...more, busy: false, status }))
+      const toolPort = [...(steps.at(-1)?.marks ?? '').matchAll(/PORT_STATE: (open|closed|unknown)$/gm)].at(-1)?.[1] as PortState | undefined
+      void writeLog($, {
+        command: `/skin fonts (${reset ? 'Claude\'s own' : 'apply'}: ${id})`, tool: toolDir, preset: null, steps, shown, result,
+        exitCode: steps.at(-1)?.exitCode ?? null, t0, ms: nowOf($) - t0, portBefore, portAfter: toolPort ?? portNow($), portAfterFrom: toolPort ? 'the tool\'s own last check' : 'checked as the run ended',
+      })
+    }
+    const b = await read($, band)
+    if (b.on || b.row !== null) await applyProof($, await lookShow($, false))
+  })
+}
 
 // One /skin run. `result` is what the log records: the tool's own RESULT line when a step ran, otherwise refused or
 // answered (the mod answered by itself).
 async function handle($: EngineInterface, parsed: ReturnType<typeof parse>, steps: Steps, found: Found, chosen: Chosen): Promise<{ text: string; result: string }> {
   if (parsed.kind === 'bad') return said(parsed.why, 'refused')
+  // A band operation (a row opening, Apply, the band's own read) finishes first: a typed command waits for it.
+  if (!(await waitOp($)) || op !== null) return said(BUSY_NOTE, 'refused')
   if (isRunning) return said('A skin change is already running. Wait for it to finish.', 'refused')
-  // The guard is claimed before the first wait, so two runs can never start together.
+  // The guard is claimed before the first wait, so two runs can never start together (and no band operation starts).
   isRunning = true
   try {
-    const env = await resolveEnv($, currentOptions)
+    // A run that may change the look: the band's claims go at once.
+    if (changes(parsed.kind)) await clearClaims($)
+    const env = await envIn($)
     if (typeof env === 'string') { found(env); return said(env, 'refused') }
     found(env.tool)
     const last = (r: Run) => resultOf(r.stdout, r.exitCode)
@@ -390,9 +864,9 @@ async function handle($: EngineInterface, parsed: ReturnType<typeof parse>, step
     }
     if (parsed.kind === 'fonts') {
       if (!fontsNow) return said('Fonts are not in this release.', 'refused')
-      if (!parsed.show) { await update($, fontsCard, () => null); return said('Fonts card closed.', 'answered') }
-      const { helper, result } = await openCard($, env, steps)
-      return said(helper === 'active' ? CARD_HELP : noLookText(helper), result)
+      if (!parsed.show) { const r = await closeRow($, 'fonts', true); return said(r === 'busy' ? 'The fonts row is still being applied; close it when it is done.' : 'Fonts card closed.', 'answered') }
+      const o = await installFonts($, await lookShow($, true, steps), false)
+      return said(o.helper === 'active' ? CARD_HELP : noLookText(o.helper), o.result)
     }
     if (parsed.kind === 'font') {
       // Through the colour helper only: no tick, no port. The tool checks the name, the release switch and that the font
@@ -410,9 +884,10 @@ async function handle($: EngineInterface, parsed: ReturnType<typeof parse>, step
         if (!(r.exitCode === 5 && noHelper(r.stdout) && parsed.skin !== null && parsed.skin !== 'off')) return said(plain(r), last(r))
       }
       if (parsed.skin === null || parsed.skin === 'off') return said('A tick goes with a skin name, for example /skin dracula font plex type on.', 'refused')
+      if (retiredText(parsed.skin) !== null) return said(retiredText(parsed.skin)!, 'refused')
       const all = await presets($, env.tool).catch(() => [] as Preset[])
       const p = all.find(x => x.name === parsed.skin)
-      if (p === undefined) return said(`No skin called ${parsed.skin}. ${listText(all, await macMode($), fontsNow)}`, 'refused')
+      if (p === undefined) return said(retiredText(parsed.skin) ?? `No skin called ${parsed.skin}. ${listText(all, await macMode($), fontsNow)}`, 'refused')
       chosen({ name: p.name, mode: p.mode })
       const wants = [...(parsed.font !== undefined ? [`--want-font=${parsed.font}`] : []), ...(parsed.type !== undefined ? [`--want-type=${parsed.type ? 'on' : 'off'}`] : [])]
       const r = await streamed($, env, ['tick', p.name, ...wants], steps, WANTS_LIMIT_MS)
@@ -430,7 +905,7 @@ async function handle($: EngineInterface, parsed: ReturnType<typeof parse>, step
       const result = startResult(r.stdout) ?? 'failed'
       if (parsed.fonts && r.exitCode === 0 && result === 'ok') {
         // The helper is on now: the fonts card opens, as /skin fonts would.
-        const o = await openCard($, env, steps).catch(() => ({ helper: 'unread', result: 'failed' }))
+        const o = await installFonts($, await lookShow($, true, steps), false).catch(() => ({ helper: 'unread', result: 'failed' }))
         return said([text, o.helper === 'active' ? CARD_HELP : noLookText(o.helper)].join('\n'), result)
       }
       return said(text, result)
@@ -451,10 +926,11 @@ async function handle($: EngineInterface, parsed: ReturnType<typeof parse>, step
     }
     if (parsed.kind !== 'apply') return said('Nothing to do.', 'answered')
     // A preset: only a name that really is a preset file gets through.
+    if (retiredText(parsed.name) !== null) return said(retiredText(parsed.name)!, 'refused')
     const all = await presets($, env.tool).catch(() => [] as Preset[])
     if (all.length === 0) return said(`No skins found in ${env.tool}/presets.`, 'failed')
     const p = all.find(x => x.name === parsed.name)
-    if (p === undefined) return said(`No skin called ${parsed.name}. ${listText(all, await macMode($))}`, 'refused')
+    if (p === undefined) return said(retiredText(parsed.name) ?? `No skin called ${parsed.name}. ${listText(all, await macMode($))}`, 'refused')
     chosen({ name: p.name, mode: p.mode })
     if (parsed.via === 'auto') {
       const r = await quick($, env, ['switch', parsed.name], steps)
@@ -563,154 +1039,209 @@ async function showLog($: EngineInterface): Promise<string> {
   try { return await Promise.race([readBoth().catch(() => `The log could not be read. The file is ${shownPath}`), late]) } finally { timer?.cancel() }
 }
 
-// ---- The fonts card (4 Nov 2026) ----
-// Drawn above the message box while open (the tick card goes first). Dropdowns for the part of the app, the font, the
-// size and the weight; Apply sends that one part's choices through the colour helper; "Claude's own" puts that part back.
-function drawFonts($: EngineInterface, e: any, next: (e: any) => unknown, f: FontsCard) {
+// ---- The fonts card (4 Nov 2026) and the appearance band (5 Nov 2026; layout C) ----
+// Drawn above the message box (the tick card goes first). One outer renderer composes the band, the open row and the
+// other plugins' drawing (next(e)) once.
+// - Band on: Reskin's own quiet line of three plain openers at the left (Skins, Fonts, Sidebar), and under it the open
+//   row, one at a time, after a one-step gap: the dropdown(s), then Apply and Reset, together at the left, and the ✕
+//   alone at the far right (the owner's live look, 5 Nov). Whole dropdowns wrap to the next line when the window is narrow;
+//   Apply and Reset stay together. Any message (status, checking, the helper's state) follows Reset, or takes its own
+//   line and wraps when it does not fit, never cut. The open opener is bold in the proven skin's accent.
+// - Band off, a row opened by another band's opener: the same row alone.
+// - Band off, the fonts row opened by typing /skin fonts: the 1.7.2 look (✕ on the left, under the message box's +).
+// Each dropdown sits in a Box that never shrinks, at its natural width (held): in the old squeezed row it collapsed
+// (live test, 5 Nov 2026).
+type Ui = ReturnType<EngineInterface['ui']['resolve']>
+type Parts = { controls: unknown[]; notes: unknown[]; apply: unknown; reset: unknown; setup: unknown }
+function drawBand($: EngineInterface, e: any, next: (e: any) => unknown, b: Band, f: FontsCard | null) {
   return (async () => {
     const drawn = await Promise.resolve(next(e)).catch(() => null)
     const below = drawn !== null && typeof drawn === 'object' && (drawn as { type?: string }).type !== 'engine' ? drawn : null
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
-    const Select = 'Select' in ui ? ui.Select : undefined
-    const sec = sectionOf(f.section)
-    const p = f.picks[sec.id]
-    const uiFont = f.picks.ui.font
-    const set = (fn: (c: FontsCard) => FontsCard) => { void update($, fontsCard, c => (c === null ? c : fn(c))) }
-    const active = f.helper === 'active'
-    // One slim row in the band (owner's look, 4 Nov 2026): the four dropdowns, Apply, Reset and a close mark; no title,
-    // help or summary (the dropdowns show what is chosen; /skin fonts explains it in the chat). A short status after.
+    const accent = b.proof?.accent ?? undefined
+    const open: RowId | null = f !== null ? 'fonts' : b.row
+    const op = (key: string, id: RowId, label: string) => open === id
+      ? <Button key={key} plain onPress={() => {}}><Text bold color={accent}>{label}</Text></Button>
+      : <Button key={key} label={label} plain dimColor onPress={() => {}} />
+    const openers = b.on && (
+      <Box key="skin-band-openers" flexDirection="row" gap={2} alignItems="center">
+        {op(SKINS_OPENER, 'skins', OPENER_LABELS.skins)}
+        {op(FONTS_OPENER, 'fonts', OPENER_LABELS.fonts)}
+        {op(SIDEBAR_OPENER, 'sidebar', OPENER_LABELS.sidebar)}
+      </Box>
+    )
+    // The row under the openers, or alone.
+    let row: unknown = null
+    if (f !== null && !b.on && !f.fromButton) row = fontsTyped($, ui, f, accent)
+    else if (open !== null) {
+      const cols = e.props?.bodyColumns
+      const compact = typeof cols === 'number' && cols < SHORT_SETUP_BELOW
+      const parts = open === 'fonts' && f !== null ? fontsParts($, ui, f, accent, compact) : bandParts($, ui, b, accent, compact)
+      const close = <Button key={open === 'fonts' ? 'skin-fonts-close' : 'skin-band-close'} label="✕" plain dimColor onPress={() => {}} />
+      const actions = parts.setup !== null || parts.apply !== null
+        ? (
+          <Box key="skin-band-actions" flexDirection="row" gap={1} alignItems="center" flexShrink={0}>
+            {(parts.setup ?? parts.apply) as any}
+            {parts.setup === null && (parts.reset as any)}
+          </Box>
+        )
+        : null
+      // The owner's live looks (5 Nov 2026): a gap under the openers; the choices tight at the left; any message right after
+      // Reset (it moves to its own line and wraps only when it does not fit); the ✕ alone at the far right. The left
+      // group wraps whole dropdowns in a narrow window; the ✕ never moves off the right edge.
+      row = (
+        <Box key="skin-band-row" flexDirection="column" paddingTop={b.on ? 1 : 0}>
+          <Box key="skin-band-rowline" flexDirection="row" alignItems="center">
+            {/* The owner's live look (5 Nov 2026, 1.9.0): the desktop draws a dropdown's frame about one cell left of its slot, so
+                a row that starts with a dropdown sat left of the "Skins" opener above it. One cell in lines the frame up. */}
+            <Box key="skin-band-line" flexDirection="row" flexWrap="wrap" columnGap={1} rowGap={1} alignItems="center" flexShrink={1} minWidth={0} paddingLeft={(parts.controls as unknown[]).length > 0 ? 1 : 0}>
+              {parts.controls as any}
+              {actions}
+              {notesBox(ui, parts.notes)}
+            </Box>
+            <Box flexGrow={1} />
+            <Box key="skin-band-close-cell" flexShrink={0}>{close}</Box>
+          </Box>
+        </Box>
+      )
+    }
+    if (!openers && row === null) return below
     return (
       <Box flexDirection="column">
-        {/* Owner's screenshots (5 Nov 2026): a top gap sat the row low when shown alone, and a bottom gap left a blank
-            strip under it inside a bar. No gap above or below: the band's own box centres the row, and a bar that hosts
-            it adds its own gap. No left gap while the ✕ leads the row (its button brings its own), so the ✕ lines up
-            with the message box's +; with no ✕ (opened from a bar), "Fonts" keeps the bar's left edge. */}
-        <Box key="skin-fonts-row" flexDirection="row" gap={1} alignItems="center" paddingLeft={f.fromButton ? 1 : 0} paddingRight={1}>
-          {/* Owner's layout (4 Nov 2026, from a screenshot): Reset ends under the band's "Fonts" opener at the right end.
-              Opened by that opener, the opener closes it too (no ✕); opened by /skin fonts, a ✕ opens the row. */}
-          {!f.fromButton && <Button key="skin-fonts-close" label="✕" plain dimColor onPress={() => {}} />}
-          <Text color={ACCENT}>Fonts</Text>
-          {!active && <Text color={DIM} wrap="truncate-end">{noLookText(f.helper)}</Text>}
-          {active && Select === undefined && <Text color={DIM} wrap="truncate-end">Use the desktop app to choose fonts.</Text>}
-          {active && Select !== undefined && <Select key="skin-fonts-section" value={sec.id} options={SECTIONS.map(s => ({ value: s.id, label: s.label }))}
-            onSelect={(v: string) => set(c => ({ ...c, section: sectionOf(v).id, status: '' }))} />}
-          {active && Select !== undefined && <Select key="skin-fonts-font" value={p.font} options={fontOptions(sec.id)}
-            onSelect={(v: string) => set(c => ({ ...c, picks: { ...c.picks, [sec.id]: withFont(sec.id, c.picks[sec.id], v, sec.id === 'ui' ? v : c.picks.ui.font) }, status: '' }))} />}
-          {active && Select !== undefined && sec.sizes.length > 0 && <Select key="skin-fonts-size" value={p.size} options={sizeOptions(sec.id)}
-            onSelect={(v: string) => set(c => ({ ...c, picks: { ...c.picks, [sec.id]: { ...c.picks[sec.id], size: v } }, status: '' }))} />}
-          {active && Select !== undefined && sec.weights.length > 0 && <Select key="skin-fonts-weight" value={p.weight} options={weightOptions(sec.id, p.font, uiFont)}
-            onSelect={(v: string) => set(c => ({ ...c, picks: { ...c.picks, [sec.id]: { ...c.picks[sec.id], weight: v } }, status: '' }))} />}
-          {f.status !== '' && <Text color={DIM} wrap="truncate-end">{f.status}</Text>}
-          <Box flexGrow={1} />
-          {/* Plain (no button chrome), so they stand no taller than the dropdowns (owner's look, 4 Nov 2026). The desktop
-              draws a native button with its own side padding, so the last button ends one cell (about 9 pt) short of the
-              band's right edge (screenshot, 4 Nov 2026): both shifted right by that cell, out of the flow, desktop only. */}
-          {active && Select !== undefined && (
-            <Box flexDirection="row" gap={1} alignItems="center" position="relative" left={1}>
-              <Button key="skin-fonts-apply" plain onPress={() => {}}><Text bold color={ACCENT}>{f.busy ? 'Applying…' : 'Apply'}</Text></Button>
-              <Button key="skin-fonts-reset" plain dimColor onPress={() => {}}>Reset</Button>
-            </Box>
-          )}
-        </Box>
+        {openers || null}
+        {row as any}
         {below}
       </Box>
     )
   })()
 }
 
-// Apply (or "Claude's own") for the part shown: one tool run, `look set`, through the colour helper only (no tick, no
-// port). Logged like every /skin run. The card then shows what the helper proved.
-async function applyFonts($: EngineInterface, reset: boolean) {
-  const f = await read($, fontsCard)
-  if (f === null || f.busy || f.helper !== 'active') return
-  const say = (status: string, more: Partial<FontsCard> = {}) => update($, fontsCard, c => (c === null ? c : { ...c, ...more, status }))
-  if (isRunning) { await say('Another skin change is running. Try again in a moment.'); return }
-  // Claimed before the first wait; every later step sits inside the try, so the finally releases it.
-  isRunning = true
-  const steps: Steps = []
-  const t0 = nowOf($)
-  const portBefore = portNow($)
-  let shown = ''
-  let result = 'failed'
-  let toolDir = 'not looked up'
-  const id = f.section as SectionId
-  const picks = reset ? defaultPicks(id) : f.picks[id]
-  try {
-    const env = await resolveEnv($, currentOptions)
-    if (typeof env === 'string') { shown = env; result = 'refused'; await say(env, { busy: false }); return }
-    toolDir = env.tool
-    await say('Applying…', { busy: true })
-    const r = await quick($, env, setArgs(id, picks), steps, 'fonts card (colour helper)', LOOK_LIMIT_MS)
-    const info = lookInfoOf(r.stdout)
-    shown = resultLineOf(r.stdout, r.stderr, r.exitCode)
-    result = resultOf(r.stdout, r.exitCode)
-    const status = shortStatus(result, shown, reset, info !== null && info.look !== null)
-    await update($, fontsCard, c => (c === null ? c : {
-      ...c, busy: false, status, helper: info?.helper ?? c.helper, look: info ? info.look : c.look,
-      // The part just sent shows what the helper proved; the other parts keep their unsent choices.
-      // (All parts changes every part's font, so then every part shows what was proved.)
-      picks: info?.look ? (id === 'all' ? allPicks(info.look) : { ...c.picks, [id]: allPicks(info.look)[id], all: allPicks(info.look).all }) : c.picks,
-    }))
-  } catch (err) {
-    shown = `The change did not finish: ${(err as Error).message}`
-    await say(shown, { busy: false })
-  } finally {
-    isRunning = false
-    const toolPort = [...(steps.at(-1)?.marks ?? '').matchAll(/PORT_STATE: (open|closed|unknown)$/gm)].at(-1)?.[1] as PortState | undefined
-    void writeLog($, {
-      command: `/skin fonts (${reset ? 'Claude\'s own' : 'apply'}: ${id})`, tool: toolDir, preset: null, steps, shown, result,
-      exitCode: steps.at(-1)?.exitCode ?? null, t0, ms: nowOf($) - t0, portBefore, portAfter: toolPort ?? portNow($), portAfterFrom: toolPort ? 'the tool\'s own last check' : 'checked as the run ended',
-    })
-  }
+// A dropdown in its own box that never shrinks, at the dropdown's natural width. the owner's live look 2 (5 Nov 2026): a
+// width guessed from the longest choice left wide empty gaps, because the desktop draws the dropdown narrower; the
+// collapse in the first live test came from shrinking, which flexShrink 0 alone stops (live look 1).
+function held(ui: Ui, key: string, _options: readonly { value: string; label?: string }[], select: unknown) {
+  const { Box } = ui
+  return <Box key={`${key}-box`} flexShrink={0}>{select as any}</Box>
 }
 
-// The fonts card opens from /skin fonts or from an opener button. Read-only, through the colour helper: what is on now,
-// as the helper proves it. Returns the helper's state and the run's result.
-const FONTS_OPENER = 'skin-fonts-open'
-let closeHintShown = false
-async function openCard($: EngineInterface, env: Env, steps: Steps, fromButton = false): Promise<{ helper: string; result: string }> {
-  const r = await quick($, env, ['look', 'show'], steps, 'fonts card (colour helper)', QUICK_LIMIT_MS)
-  const info = lookInfoOf(r.stdout)
-  const helper = info?.helper ?? 'unread'
-  const look = info?.look ?? null
-  await update($, fontsCard, () => ({ helper, look, section: 'all', picks: allPicks(look ?? []), busy: false, fromButton,
-    status: helper !== 'active' ? '' : look === null ? 'The fonts that are on now could not be proven. Choose and apply, or run /skin font off first.' : '' }))
-  return { helper, result: resultOf(r.stdout, r.exitCode) }
+// The row's messages, last in the wrapping group: right after Reset when they fit, else on a line of their own,
+// wrapped to the row's width (they may shrink; their text wraps, never cut).
+function notesBox(ui: Ui, notes: unknown[]) {
+  const { Box } = ui
+  if (notes.length === 0) return null
+  return <Box key="skin-band-notes" flexDirection="column" flexShrink={1} minWidth={0}>{notes as any}</Box>
 }
-// The opener's press toggles the card (owner, 4 Nov 2026): open when closed, closed when open. Never a tick, never a
-// second run while one is going.
-async function openFromButton($: EngineInterface) {
-  if (!fontsNow) { await skinNames($).catch(() => []) } // the release switch is read with the presets
-  if (!fontsNow) { $.ui.toast('Fonts are not in this release.', { timeoutMs: 5_000 }); return }
-  const open = await read($, fontsCard)
-  if (open !== null) {
-    if (open.busy) { $.ui.toast('Fonts are still being applied. Press again when it is done.', { timeoutMs: 5_000 }); return }
-    await update($, fontsCard, () => null)
-    return
+
+// The Skins and Sidebar rows' controls: one dropdown (drafts only), and the row's messages.
+function bandParts($: EngineInterface, ui: Ui, b: Band, accent: string | undefined, compact = false): Parts {
+  const { Text, Button } = ui
+  const Select = 'Select' in ui ? ui.Select : undefined
+  const st = rowState(b.helper)
+  // Ignored while a band operation runs (its choices were read when it started).
+  const pick = (fn: (d: Band['drafts']) => Band['drafts']) => { if (!freeNow()) return; void update($, band, x => (x.busy || x.rowId !== b.rowId ? x : { ...x, drafts: fn(x.drafts), touched: true, status: '', now: null })) }
+  const controls: unknown[] = []
+  const notes: unknown[] = []
+  if (b.checking && b.helper === 'unread') notes.push(<Text key="skin-band-checking" dimColor>Checking…</Text>)
+  else if (!st.controls) notes.push(<Text key="skin-band-text" dimColor wrap="wrap">{st.text}</Text>)
+  else if (Select === undefined) notes.push(<Text key="skin-band-nosel" dimColor wrap="wrap">Use the desktop app to choose.</Text>)
+  else if (b.row === 'skins') {
+    const options = skinOptions(presetNames)
+    controls.push(held(ui, 'skin-band-skin', options, <Select key="skin-band-skin" value={b.drafts.skin} options={options} onSelect={(v: string) => pick(d => ({ ...d, skin: v }))} />))
+  } else {
+    controls.push(held(ui, 'skin-band-sidebar', SIDEBAR_OPTIONS, <Select key="skin-band-sidebar" value={b.drafts.sidebar} options={[...SIDEBAR_OPTIONS]} onSelect={(v: string) => pick(d => ({ ...d, sidebar: v === 'off' ? 'off' : 'on' }))} />))
   }
-  if (isRunning) { $.ui.toast('A skin change is already running. Wait for it to finish.', { timeoutMs: 5_000 }); return }
-  isRunning = true
-  const steps: Steps = []
-  const t0 = nowOf($)
-  const portBefore = portNow($)
-  let shown = '', result = 'failed', toolDir = 'not looked up'
-  try {
-    const env = await resolveEnv($, currentOptions)
-    if (typeof env === 'string') { shown = env; result = 'refused'; $.ui.toast(env, { timeoutMs: 8_000 }); return }
-    toolDir = env.tool
-    const o = await openCard($, env, steps, true)
-    shown = o.helper === 'active' ? 'fonts card opened' : noLookText(o.helper)
-    result = o.result
-  } catch (err) {
-    shown = `The fonts card did not open: ${(err as Error).message}`
-    $.ui.toast(shown, { timeoutMs: 8_000 })
-  } finally {
-    isRunning = false
-    const toolPort = [...(steps.at(-1)?.marks ?? '').matchAll(/PORT_STATE: (open|closed|unknown)$/gm)].at(-1)?.[1] as PortState | undefined
-    void writeLog($, {
-      command: '/skin fonts (opener button)', tool: toolDir, preset: null, steps, shown, result,
-      exitCode: steps.at(-1)?.exitCode ?? null, t0, ms: nowOf($) - t0, portBefore, portAfter: toolPort ?? portNow($), portAfterFrom: toolPort ? 'the tool\'s own last check' : 'checked as the run ended',
-    })
+  if (b.status !== '') notes.push(<Text key="skin-band-status" dimColor wrap="wrap">{b.status}</Text>)
+  // Only while a current read still proves that very skin: an expired or cleared proof drops it.
+  else if (b.row === 'skins' && b.now !== null && b.proof !== null && b.proof.skin === b.now.skin) notes.push(nowOnLine(ui, b.now, accent))
+  const ready = st.controls && !(b.checking && b.helper === 'unread') && Select !== undefined
+  const apply = ready && !st.setup ? <Button key="skin-band-apply" plain onPress={() => {}}><Text bold color={accent}>{b.busy ? 'Applying…' : 'Apply'}</Text></Button> : null
+  const reset = ready && !st.setup && b.row === 'skins' ? <Button key="skin-band-reset" label="Reset" plain dimColor onPress={() => {}} /> : null
+  const setup = ready && st.setup ? <Button key="skin-band-setup" plain onPress={() => {}}><Text bold color={accent}>{b.busy ? 'Setting up…' : compact ? 'Set up…' : 'Set up with one tick…'}</Text></Button> : null
+  return { controls, notes, apply, reset, setup }
+}
+
+// Option C's line (the owner's pick, 5 Nov 2026): "✓ Now on:
+// <skin>" and six chips (light page, sidebar, accent, a gap, dark page, sidebar, accent). Each chip is two spaces on its
+// colour. The line never shrinks (layout C: natural widths, no cut-off text); in a narrow window it moves whole to its
+// own line, as any message does.
+function nowOnLine(ui: Ui, now: NowOn, accent: string | undefined) {
+  const { Box, Text } = ui
+  const chip = (c: string, k: string) => <Text key={k} backgroundColor={c}>{'  '}</Text>
+  return (
+    <Box key="skin-band-now" flexDirection="row" alignItems="center" flexShrink={0} columnGap={1}>
+      <Text bold color={accent}>✓ Now on:</Text>
+      <Text key="skin-band-now-name" bold>{skinLabel(now.skin)}</Text>
+      <Box key="skin-band-chips" flexDirection="row" flexShrink={0}>
+        {now.light.map((c, i) => chip(c, `skin-chip-l${i}`))}
+        <Text>{' '}</Text>
+        {now.dark.map((c, i) => chip(c, `skin-chip-d${i}`))}
+      </Box>
+    </Box>
+  )
+}
+
+// The fonts row's controls (the four dropdowns), its messages, and its own Apply and Reset.
+function fontsParts($: EngineInterface, ui: Ui, f: FontsCard, accent: string | undefined, compact = false): Parts {
+  const { Text, Button } = ui
+  const Select = 'Select' in ui ? ui.Select : undefined
+  const sec = sectionOf(f.section)
+  const p = f.picks[sec.id]
+  const uiFont = f.picks.ui.font
+  // Only the fonts row this dropdown belongs to, and never while busy.
+  const set = (fn: (c: FontsCard) => FontsCard) => { if (!freeNow()) return; void update($, fontsCard, c => (c === null || c.busy || c.openId !== f.openId ? c : fn(c))) }
+  const active = f.helper === 'active'
+  const controls: unknown[] = []
+  const notes: unknown[] = []
+  if (!active) notes.push(<Text key="skin-fonts-text" dimColor wrap="wrap">{noLookText(f.helper)}</Text>)
+  if (active && Select === undefined) notes.push(<Text key="skin-fonts-nosel" dimColor wrap="wrap">Use the desktop app to choose fonts.</Text>)
+  if (active && Select !== undefined) {
+    const secOpts = SECTIONS.map(s => ({ value: s.id, label: s.label }))
+    controls.push(held(ui, 'skin-fonts-section', secOpts, <Select key="skin-fonts-section" value={sec.id} options={secOpts}
+      onSelect={(v: string) => set(c => ({ ...c, section: sectionOf(v).id, status: '' }))} />))
+    const fontOpts = fontOptions(sec.id)
+    controls.push(held(ui, 'skin-fonts-font', fontOpts, <Select key="skin-fonts-font" value={p.font} options={fontOpts}
+      onSelect={(v: string) => set(c => ({ ...c, picks: { ...c.picks, [sec.id]: withFont(sec.id, c.picks[sec.id], v, sec.id === 'ui' ? v : c.picks.ui.font) }, status: '' }))} />))
+    if (sec.sizes.length > 0) {
+      const sizeOpts = sizeOptions(sec.id)
+      controls.push(held(ui, 'skin-fonts-size', sizeOpts, <Select key="skin-fonts-size" value={p.size} options={sizeOpts}
+        onSelect={(v: string) => set(c => ({ ...c, picks: { ...c.picks, [sec.id]: { ...c.picks[sec.id], size: v } }, status: '' }))} />))
+    }
+    if (sec.weights.length > 0) {
+      const weightOpts = weightOptions(sec.id, p.font, uiFont)
+      controls.push(held(ui, 'skin-fonts-weight', weightOpts, <Select key="skin-fonts-weight" value={p.weight} options={weightOpts}
+        onSelect={(v: string) => set(c => ({ ...c, picks: { ...c.picks, [sec.id]: { ...c.picks[sec.id], weight: v } }, status: '' }))} />))
+    }
   }
+  if (f.status !== '') notes.push(<Text key="skin-fonts-status" dimColor wrap="wrap">{f.status}</Text>)
+  const ready = active && Select !== undefined
+  const apply = ready ? <Button key="skin-fonts-apply" plain onPress={() => {}}><Text bold color={accent}>{f.busy ? 'Applying…' : 'Apply'}</Text></Button> : null
+  const reset = ready ? <Button key="skin-fonts-reset" label="Reset" plain dimColor onPress={() => {}} /> : null
+  const setup = f.helper === 'none' && Select !== undefined ? <Button key="skin-fonts-setup" plain onPress={() => {}}><Text bold color={accent}>{f.busy ? 'Setting up…' : compact ? 'Set up…' : 'Set up with one tick…'}</Text></Button> : null
+  return { controls, notes, apply, reset, setup }
+}
+
+// The fonts row opened by typing /skin fonts with the band off. Owner's screenshots (5 Nov 2026): no gap above or
+// below, and no left gap while the ✕ leads the row, so the ✕ lines up with the message box's +. Since layout C
+// it wraps like the band's row: the dropdowns never shrink, so a row that does not
+// fit moves whole dropdowns, then Apply and Reset together, to the next line. Messages after Reset, as in the band row.
+function fontsTyped($: EngineInterface, ui: Ui, f: FontsCard, accent: string | undefined) {
+  const { Box, Text, Button } = ui
+  const parts = fontsParts($, ui, f, accent)
+  return (
+    <Box key="skin-fonts-row" flexDirection="column">
+      <Box key="skin-fonts-line" flexDirection="row" flexWrap="wrap" columnGap={1} alignItems="center" paddingRight={1}>
+        <Button key="skin-fonts-close" label="✕" plain dimColor onPress={() => {}} />
+        <Text bold color={accent}>Fonts</Text>
+        {parts.controls as any}
+        {(parts.apply !== null || parts.setup !== null) && (
+          <Box key="skin-band-actions" flexDirection="row" gap={1} alignItems="center" flexShrink={0}>
+            {(parts.setup ?? parts.apply) as any}
+            {parts.setup === null && (parts.reset as any)}
+          </Box>
+        )}
+        {notesBox(ui, parts.notes)}
+      </Box>
+    </Box>
+  )
 }

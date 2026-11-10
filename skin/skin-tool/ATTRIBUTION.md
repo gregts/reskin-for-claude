@@ -1,7 +1,7 @@
 # Attribution
 
 These skins are colour tables only (hex values). Each colour scheme belongs to its authors. The starting values
-come from each scheme's published palette or theme files, or, for the three Codex-adapted looks, from colour values
+come from each scheme's published palette or theme files, or, for the two Codex-adapted looks, from colour values
 observed in the inspected app bundle (the table says which); colours this project derived or changed are listed per
 skin below with the original value and the reason. This project is not affiliated with, endorsed by or sponsored by
 Anthropic, GitHub, or any of the colour scheme projects. "Claude" is a trademark of Anthropic, PBC.
@@ -22,10 +22,11 @@ Anthropic, GitHub, or any of the colour scheme projects. "Claude" is a trademark
 | Ayu (dark, light) | MIT | github.com/ayu-theme/ayu-colors, github.com/ayu-theme/vscode-ayu |
 | Night Owl, Light Owl | MIT | github.com/sdras/night-owl-vscode-theme |
 | VS (Dark+, Light+) | MIT | github.com/microsoft/vscode (extensions/theme-defaults) |
-| Absolutely, Linea, Verc | no separate theme licence found in the inspected app bundle | Adapted from colour values observed in the Absolutely, Linear and Vercel themes of OpenAI's Codex app (version 26.1007.71326); not affiliated with OpenAI, Linear or Vercel. Colour values only; no permission is claimed. |
+| Kanagawa (wave, lotus) | MIT (Copyright (c) 2021 Tommaso Laurenzi) | github.com/rebelot/kanagawa.nvim (lua/kanagawa/colors.lua, lua/kanagawa/themes.lua) |
+| Absolutely, Linea | no separate theme licence found in the inspected app bundle | Adapted from colour values observed in the Absolutely and Linear themes of OpenAI's Codex app (version 26.1007.71326); not affiliated with OpenAI or Linear. Colour values only; no permission is claimed. |
 | Classic dark, Classic light | Apache-2.0 covers only the brand-guidelines skill's palette (no trademark rights are granted); the colours observed in Claude's published stylesheet carry no licence of their own | github.com/anthropics/skills (brand-guidelines); Claude's stylesheet as served to the desktop app |
 
-Values were read from each source between 11 and 17 October 2026: the original schemes on 11 October (checked by independent reviewers), the halves added on 17 October (Alucard, Solarized dark, Nord light, Ayu, Night Owl, Light Owl, VS, Absolutely, Linea, Verc) on that day. Published palettes and values observed inside an app bundle are different kinds of source; the table says which. Shades described as coming from a scheme's VS Code theme are not part of the scheme's own specification. Re-check against the sources before each release.
+Values were read from each source between 11 and 17 October 2026: the original schemes on 11 October (checked by independent reviewers), the halves added on 17 October (Alucard, Solarized dark, Nord light, Ayu, Night Owl, Light Owl, VS, Absolutely, Linea) on that day, and Kanagawa (wave, lotus) on 5 November 2026. Published palettes and values observed inside an app bundle are different kinds of source; the table says which. Shades described as coming from a scheme's VS Code theme are not part of the scheme's own specification. Re-check against the sources before each release.
 
 ## Sidebar hover and selected-row colours
 
@@ -58,7 +59,7 @@ matches its own Settings > Appearance.
 - vs: vs-dark (dark) + vs-light (light)
 - absolutely: absolutely-dark (dark) + absolutely-light (light)
 - linea: linea-dark (dark) + linea-light (light)
-- verc: verc-dark (dark) + verc-light (light)
+- kanagawa: kanagawa-wave (dark) + kanagawa-lotus (light)
 
 ## Session status dots
 
@@ -321,21 +322,19 @@ Note: Page and text are the Codex theme's chromeTheme surface and ink (#0f0f11, 
 - selected row #22253b moved to #202337 so text reads better on it, while the band still stands out from the sidebar
 - accent: fill #606acc, button text #ffffff, hover #5058b8, chip #21233a, border #333865 (ramp from Claude's lightness steps with this hue)
 
-### verc-dark (dark) - adapted from colour values observed in the Vercel theme of OpenAI's Codex app 26.1007.71326 (not affiliated)
+### kanagawa-wave (dark) - rebelot/kanagawa.nvim wave (colors.lua + themes.lua)
 
-page #000000, sidebar #000000, card #0a0a0a, text #ededed, secondary #a1a1a1, muted #828282, link #1a7dfe, hover #131313, selected row #051932
-accent fill #006efe, button text #ffffff, accent hover #005edc, accent chip #001838
+page #1f1f28, sidebar #16161d, card #2a2a37, text #dcd7ba, secondary #c8c093, muted #9f9e99, link #819ed9, hover #2a2a37, selected row #223249
+accent fill #7e9cd8, button text #1f1f28, accent hover #90afec, accent chip #303547
 
-Note: Page and sidebar are pure black as in the Codex theme; the card shade #0a0a0a is this project's pick (the theme has none). Danger and success are its diff colours; warning is borrowed from classic-dark. Hover and selected are computed.
+Note: Theme roles: page ui.bg (sumiInk3), sidebar ui.bg_m3 (sumiInk0), card ui.bg_p1 (sumiInk4), text ui.fg (fujiWhite), secondary ui.fg_dim (oldWhite), muted syn.comment (fujiGray), accent syn.fun (crystalBlue), danger, warning and success diag.error, diag.warning and diag.ok. Hover is ui.bg_p1 (sumiInk4) and the selected row its selection ui.bg_visual (waveBlue1), the same roles as the lotus half. Its cursor line ui.bg_p2 (sumiInk5) is not used for hover: it stands out from the sidebar more than the selection does.
 
-- pop-up shade #181818 computed (card mixed 6% toward text)
-- muted text #666666 nudged to #828282 to read on every surface (4.5 / 4.5 / 4.5 / 4.5:1)
-- link colour #006efe nudged to #1a7dfe to read on every surface (4.5 / 4.5 / 4.5 / 4.5:1)
-- danger text #f13342 nudged to #f13746 to read on every surface (4.5 / 4.5 / 4.5 / 4.5:1)
-- hover #131313 computed (text mixed 8% into the sidebar; the scheme has no published token, or this project replaced it: see the note above)
-- selected row #061c38 computed (link colour mixed 22% into the sidebar; the scheme has no published token, or this project replaced it: see the note above)
-- selected row #061c38 moved to #051932 so text reads better on it, while the band still stands out from the sidebar
-- accent: fill #006efe, button text #ffffff, hover #005edc, chip #001838, border #003272 (ramp from Claude's lightness steps with this hue)
+- pop-up shade #35343f computed (card mixed 6% toward text)
+- muted text #727169 nudged to #9f9e99 to read on every surface (4.5 / 4.5 / 4.5 / 4.5:1)
+- link colour #7e9cd8 nudged to #819ed9 to read on every surface (4.5 / 4.5 / 4.5 / 4.5:1)
+- danger text #e82424 nudged to #f17c7c to read on every surface (4.5 / 4.5 / 4.5 / 4.5:1)
+- accent background #343b4f moved to #303547 so link and main text read 4.5:1 on it
+- accent: fill #7e9cd8, button text #1f1f28, hover #90afec, chip #303547, border #4a5777 (ramp from Claude's lightness steps with this hue)
 
 ### catppuccin-latte (light) - catppuccin/palette latte
 
@@ -666,24 +665,26 @@ Note: Page and text are the chromeTheme surface and ink (#fcfcfd, #1b1b1b); side
 - accent background #d6d9f3 moved to #dee0f5 so link and main text read 4.5:1 on it
 - accent: fill #5e6ad2, button text #ffffff, hover #4e58be, chip #dee0f5, border #9da4e3 (ramp from Claude's lightness steps with this hue)
 
-### verc-light (light) - adapted from colour values observed in the Vercel theme of OpenAI's Codex app 26.1007.71326 (not affiliated)
+### kanagawa-lotus (light) - rebelot/kanagawa.nvim lotus (colors.lua + themes.lua)
 
-page #ffffff, sidebar #ffffff, card #ffffff, text #171717, secondary #5c5c5c, muted #666666, link #0062eb, hover #f4f4f4, selected row #e4efff
-accent fill #006aff, button text #ffffff, accent hover #015bdc, accent chip #e2eeff
+page #f2ecbc, sidebar #d5cea3, card #f9f6e1, text #4a4a58, secondary #4d4c43, muted #56554f, link #3f567f, hover #e7dba0, selected row #c9cbd1
+accent fill #4d699b, button text #ffffff, accent hover #3d5888, accent chip #cacdb4
 
-Note: Page and sidebar pure white as in the Codex theme; danger and success its diff colours; warning borrowed from classic-light; hover and selected computed.
+Note: Theme roles: page ui.bg (lotusWhite3), sidebar ui.bg_m3 (lotusWhite0), text ui.fg (lotusInk1), muted syn.comment (lotusGray3), accent syn.fun (lotusBlue4), danger, warning and success diag.error, diag.warning and diag.ok. Its ui.fg_dim (lotusInk2) is darker than its main text, so secondary is the float border colour lotusGray2. Its own card shades are darker than the page; the card is computed lighter, like Claude's light cards. Hover is ui.bg_p1 (lotusWhite4) and the selected row its selection ui.bg_visual (lotusViolet3), the same roles as the wave half.
 
-- success text #28a948 nudged to #20873a to read on every surface (4.5 / 4.5 / 4.5 / 4.5:1)
-- hover #ececec computed (text mixed 8% into the sidebar; the scheme has no published token, or this project replaced it: see the note above)
-- hover #ececec moved to #f4f4f4 so text reads better on it, while the band still stands out from the sidebar
-- selected row #c7deff computed (link colour mixed 22% into the sidebar; the scheme has no published token, or this project replaced it: see the note above)
-- selected row #c7deff moved to #e4efff so text reads better on it, while the band still stands out from the sidebar
-- link colour (on row bands) #006aff nudged to #0062eb to read on every surface (4.5 / 4.5 / 4.5 / 4.5 / 4.5 / 4.5:1)
-- danger text (on row bands) #eb001d nudged to #d8001b to read on every surface (4.5 / 4.5 / 4.5 / 4.5 / 4.5 / 4.5:1)
-- success text (on row bands) #20873a nudged to #1d7c35 to read on every surface (4.5 / 4.5 / 4.5 / 4.5 / 4.5 / 4.5:1)
-- secondary text #666666 strengthened to #5c5c5c to stay clearly stronger than muted hints
-- accent background #c2dbff moved to #e2eeff so link and main text read 4.5:1 on it
-- accent: fill #006aff, button text #ffffff, hover #015bdc, chip #e2eeff, border #66a6ff (ramp from Claude's lightness steps with this hue)
+- card shade #f9f6e1 computed (bg mixed 55% toward white; the scheme has no lighter shade, and Claude's own light cards are lighter than the page)
+- secondary text #716e61 nudged to #58564c to read on every surface (4.5 / 4.5 / 4.5 / 4.5:1)
+- muted text #8a8980 nudged to #56554f to read on every surface (4.5 / 4.5 / 4.5 / 4.5:1)
+- link colour #4d699b nudged to #3f567f to read on every surface (4.5 / 4.5 / 4.5 / 4.5:1)
+- danger text #e82424 nudged to #ac1b1b to read on every surface (4.5 / 4.5 / 4.5 / 4.5:1)
+- success text #6f894e nudged to #4b5d35 to read on every surface (4.5 / 4.5 / 4.5 / 4.5:1)
+- warning text #e98a00 nudged to #7e4b00 to read on every surface (4.5 / 4.5 / 4.5 / 4.5:1)
+- danger text (on row bands) #ac1b1b nudged to #a91a1a to read on every surface (4.5 / 4.5 / 4.5 / 4.5 / 4.5 / 4.5:1)
+- warning text (on row bands) #7e4b00 nudged to #7b4a00 to read on every surface (4.5 / 4.5 / 4.5 / 4.5 / 4.5 / 4.5:1)
+- success text (on row bands) #4b5d35 nudged to #4a5b34 to read on every surface (4.5 / 4.5 / 4.5 / 4.5 / 4.5 / 4.5:1)
+- secondary text #58564c strengthened to #4d4c43 to stay clearly stronger than muted hints
+- main text #545464 strengthened to #4a4a58 to stay at least as strong as secondary text
+- accent: fill #4d699b, button text #ffffff, hover #3d5888, chip #cacdb4, border #8f9da8 (ramp from Claude's lightness steps with this hue)
 
 ### classic-light (light) - Anthropic brand palette + legacy app light values
 

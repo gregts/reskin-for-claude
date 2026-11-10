@@ -289,6 +289,8 @@ describe('summary line', () => {
     expect(outcome(rec({ command: '/skin remove', steps: [{ ...SWITCH, output: 'helper: none (already clean). If Claude still shows a skin, take it off with: /skin remove --tick' }] }))).toContain('nothing to remove: no colour helper was running')
   })
   test('the path says how far each step got', () => {
+    expect(stepPath({ via: 'debugger, one click', exitCode: 2, output: 'The skin verc was retired.\nPORT_STATE: unknown' })).toBe('none (refused before anything ran)') // the Air look, 6 Nov 2026
+    expect(stepPath({ via: 'debugger, you tick', exitCode: 2, output: 'READY_TO_TICK' })).toContain('asked for the click')
     expect(stepPath({ via: 'debugger, you tick', exitCode: 5, output: 'Not started: Port 9229 is already open' })).toBe('debugger, you tick (stopped before the debugger was asked for)')
     expect(stepPath({ via: 'debugger, you tick', exitCode: 4, output: 'READY_TO_TICK\nWARNING: Time is up' })).toBe('debugger, you tick (asked for the click; no click came in time)')
     expect(stepPath({ via: 'debugger, you tick', exitCode: 130, output: 'READY_TO_TICK\nPORT_STATE: open' })).toBe('debugger, you tick (asked for the click; the debugger opening was not confirmed)')
@@ -416,7 +418,7 @@ test('every /skin run appends one entry with the facts, timed raw output, and no
   for (const want of ['command: /skin tokyo-night-day', 'from: /skin mod 9.9.9', 'claude: running 2.37337.1; installed 2.37337.1; Appearance setting: dark; Mac: dark',
     'preset: tokyo-night-day (light only)', 'port 9229 before: closed', 'path: colour helper', 'port 9229 after: closed', 'result: ok', 'exit code: 0',
     'summary: /skin tokyo-night-day: applied, but not visible: the skin is light only and Claude was showing dark. Port 9229 closed.',
-    '--- step 1: ["/opt/homebrew/bin/node","/tool/skin-auto.mjs","switch","tokyo-night-day"]', '--- shown in chat', '  Skin tokyo-night-day is on, but you cannot see it yet']) expect(a.stdin).toContain(want)
+    '--- step 1: ["/opt/homebrew/bin/node","/tool/skin-auto.mjs","switch","tokyo-night-day","--lock-wait=20000"]', '--- shown in chat', '  Skin tokyo-night-day is on, but you cannot see it yet']) expect(a.stdin).toContain(want)
   expect(a.stdin).toMatch(/\n {2}\[\+\d+\.\d{3}s\] Skin tokyo-night-day applied by the colour helper\./) // quick runs are timed too
   expect(a.stdin).not.toContain('SECRET')
   expect(a.stdin).not.toContain(HOME)

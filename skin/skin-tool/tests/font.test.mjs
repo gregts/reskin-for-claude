@@ -11,7 +11,7 @@ import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { FONT_KEYS, FONT_SIZES, FONT_STACKS, SIZE_LEADING, LOOK_PARTS, parseLook, fontFamily, fontKeyOf, splitFontKey, sizeLine, fontInstalled, fontLines, readPrefs, sendSwitch, typeLine, writePrivateJson } from '../skin-lib.mjs'
+import { FONT_KEYS, FONT_LINKS, FONT_SIZES, FONT_STACKS, FONT_WEIGHTS, SIZE_LEADING, LOOK_PARTS, parseLook, fontFamily, fontName, fontKeyOf, splitFontKey, sizeLine, fontInstalled, fontLines, readPrefs, sendSwitch, typeLine, writePrivateJson } from '../skin-lib.mjs'
 
 const tool = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 const uid = process.getuid()
@@ -80,7 +80,7 @@ async function started(typeSheets = { headers: TYPE }) {
 
 // ---- The checker and the sheets ----
 test('every combination is offered and passes the checker: headers, each font, headers plus each font', () => {
-  assert.deepEqual(NAMES, ['inter-tight', 'literata', 'plex', 'noto', 'roboto', 'lato', 'zen-maru'])
+  assert.deepEqual(NAMES, ['inter-tight', 'literata', 'plex', 'noto', 'roboto', 'lato', 'zen-maru', 'commissioner', 'jetbrains'])
   // Each font alone (Claude's size) and with each size, each also with the headers (3 Nov 2026: sizes).
   assert.deepEqual(FONT_KEYS, NAMES.flatMap((n) => [n, ...FONT_SIZES.map((z) => `${n}-${z}`)]))
   // Font picker (4 Nov 2026): the helper gets the header sheet and every look part; today's font keys are compositions.
@@ -93,6 +93,17 @@ test('every combination is offered and passes the checker: headers, each font, h
   }
   for (const css of Object.values(ALL)) { assert.ok(skin.checkTypeCss(css) >= 1); assert.ok(css.length <= 2048) }
   assert.equal(fontFamily('zen-maru'), 'Zen Maru Gothic')
+  // 8 Nov 2026: the two retained added fonts, their families, links and real weights.
+  assert.equal(fontFamily('commissioner'), 'Commissioner')
+  assert.equal(fontFamily('jetbrains'), 'JetBrains Mono')
+  for (const n of NAMES) assert.match(FONT_LINKS[n], /^https:\/\/fonts\.google\.com\/specimen\/[A-Za-z+]+$/, n)
+  assert.equal(FONT_LINKS.jetbrains, 'https://fonts.google.com/specimen/JetBrains+Mono')
+  assert.equal(fontName('alegreya'), null, 'Alegreya Sans was dropped 9 Nov 2026')
+  assert.equal(fontName('Alegreya Sans'), null)
+  assert.deepEqual(FONT_WEIGHTS.commissioner, [300, 400, 500, 600])
+  assert.deepEqual(FONT_WEIGHTS.jetbrains, [300, 400, 500, 600])
+  assert.deepEqual(Object.keys(FONT_WEIGHTS), NAMES)
+  assert.deepEqual(Object.keys(FONT_LINKS), NAMES)
   assert.throws(() => skin.fontCss('comic'), /Not a Reskin font/)
   assert.throws(() => skin.fontCss('__proto__'), /Not a Reskin font/)
 })
@@ -163,7 +174,7 @@ test('session.json lists the font cap and fonts; a helper without font sheets ha
     const s = JSON.parse(readFileSync(path.join(a.d.dir, 'session.json'), 'utf8'))
     assert.deepEqual(s.caps, ['check', 'type', 'font', 'look'])
     assert.deepEqual(s.parts, LOOK_PARTS)
-    assert.equal(s.gen, 8)
+    assert.equal(s.gen, 12) // 12 since 9 Nov 2026 (the health sampler changed: the helper holds it)
   } finally { a.d.done() }
   const b = await started({ headers: TYPE })
   try {
@@ -313,7 +324,7 @@ test('font lines: per kind of text, quotes stripped, not checked when absent or 
   const page = (fonts) => ({ ready: 'complete', fonts })
   const ack = (pages, stable = true, font = 'plex') => ({ font, sample: { stable, pages } })
   const all = { paragraph: '"IBM Plex Sans", system-ui, sans-serif', list: 'IBM Plex Sans, system-ui', bold: '"IBM Plex Sans"', composer: 'IBM Plex Sans', sidebarRow: 'ui-sans-serif, system-ui' }
-  assert.deepEqual(fontLines(ack([page(all)])), ['font: plex set: chat text match, reply lists match, bold match, message box match, sidebar rows DO NOT match (computed font family)'])
+  assert.deepEqual(fontLines(ack([page(all)])), ['font: plex set: chat text match, reply lists match, bold match, message box match, sidebar rows DO NOT match, your questions not checked (computed font family)'])
   assert.match(fontLines(ack([page({ paragraph: 'IBM Plex Sans', list: null })]))[0], /chat text match, reply lists not checked, bold not checked/)
   assert.deepEqual(fontLines(ack([page(all)], false)), ['font: plex set (not checked on the page)'])
   assert.deepEqual(fontLines(ack([])), ['font: plex set (not checked on the page)'])
@@ -376,7 +387,7 @@ test('a failed apply with no time left for a proven cleanup still stops the shee
 
 test('fontName takes the short name or the full family name, in any case and spelling of spaces', async () => {
   const { fontName } = await import('../skin-lib.mjs')
-  for (const [typed, name] of [['plex', 'plex'], ['IBM Plex Sans', 'plex'], ['ibm+plex+sans', 'plex'], ['ibm-plex-sans', 'plex'], ['Zen Maru Gothic', 'zen-maru'], ['zen-maru', 'zen-maru'], ['NOTO sans', 'noto'], ['Inter', 'inter-tight'], ['inter', 'inter-tight'], ['Inter Tight', 'inter-tight'], ['inter+tight', 'inter-tight']]) assert.equal(fontName(typed), name, typed)
+  for (const [typed, name] of [['plex', 'plex'], ['IBM Plex Sans', 'plex'], ['ibm+plex+sans', 'plex'], ['ibm-plex-sans', 'plex'], ['Zen Maru Gothic', 'zen-maru'], ['zen-maru', 'zen-maru'], ['NOTO sans', 'noto'], ['Inter', 'inter-tight'], ['inter', 'inter-tight'], ['Inter Tight', 'inter-tight'], ['inter+tight', 'inter-tight'], ['JetBrains Mono', 'jetbrains'], ['jetbrains', 'jetbrains'], ['jetbrains+mono', 'jetbrains'], ['COMMISSIONER', 'commissioner']]) assert.equal(fontName(typed), name, typed)
   for (const bad of ['comic sans', '', 'sans', '__proto__', 'constructor', 'ibm']) assert.equal(fontName(bad), null, bad)
 })
 
@@ -401,7 +412,7 @@ test('size keys: exact round trip, no font name looks like a sized key, no key c
 test('size rules: * and .prose together, exactly their properties, one table row, important, beside a font rule only', () => {
   const font = skin.fontCss('plex')
   const star = (body) => `* { ${body} }\n`
-  const prose = (body) => `.prose { ${body} }\n`
+  const prose = (body) => `${skin.PROSE_SELECTOR} { ${body} }\n`
   const S16 = '--chat-body: 16px !important; --chat-leading: 22px !important; --cmp-font-size: 16px !important; --cmp-leading: 22px !important;'
   const P16 = 'font-size: 16px !important; line-height: 22px !important;'
   assert.equal(skin.sizeCss(16), star(S16) + prose(P16))
@@ -443,7 +454,7 @@ test('size rules: * and .prose together, exactly their properties, one table row
     const z = splitFontKey(k).size
     const css = sheetOf(k)
     if (z === null) assert.doesNotMatch(css, /--chat-body|\.prose/)
-    else { assert.ok(css.includes(`--chat-body: ${z}px`) && css.includes(`.prose { font-size: ${z}px !important; line-height: ${SIZE_LEADING[z]}px`), k) }
+    else { assert.ok(css.includes(`--chat-body: ${z}px`) && css.includes(`${skin.PROSE_SELECTOR} { font-size: ${z}px !important; line-height: ${SIZE_LEADING[z]}px`), k) }
   }
 })
 
@@ -502,7 +513,7 @@ test('check: size and line height are judged together, within 0.05 px; missing o
   const ok = { paragraph: 'IBM Plex Sans', list: 'IBM Plex Sans', bold: 'IBM Plex Sans', composer: 'IBM Plex Sans', sidebarRow: 'IBM Plex Sans' }
   const page = (sizes) => ({ fonts: ok, sizes })
   const lines = (pages) => fontLines({ font: 'plex-16', sample: { stable: true, pages } })
-  assert.equal(lines([page({ paragraph: { size: 16, line: 22.0004 }, composer: { size: 16, line: 22 } })])[1], 'size: 16px with 22px lines: chat text match, message box match (computed size and line height)')
+  assert.equal(lines([page({ paragraph: { size: 16, line: 22.0004 }, composer: { size: 16, line: 22 } })])[1], 'size: 16px with 22px lines: chat text match, message box match, your questions not checked (computed size and line height)')
   assert.match(lines([page({ paragraph: { size: 16, line: 21 }, composer: { size: 16, line: 22 } })])[1], /chat text DO NOT match/)
   assert.match(lines([page({ paragraph: { size: 15, line: 22 }, composer: null })])[1], /chat text DO NOT match, message box not checked/)
   assert.match(lines([page({ paragraph: { size: 16, line: 22 }, composer: { size: 16, line: 22 } }), { error: 'unreadable' }])[1], /chat text match on 1 of 2 windows/)

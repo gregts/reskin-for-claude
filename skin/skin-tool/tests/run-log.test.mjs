@@ -13,7 +13,7 @@ import {
   END, HEAD, LOG_FILE, ENTRY_MAX_BYTES, appendEntry, appearanceOf, capture, formatEntry, hiddenInfo, loggingOn, macModeOf, outcome, presetMode,
   presetOf, redact, redactArgs, runningVersionOf, stepPath, stripComments, viaOf, finish, milestones, MAX_LINES, handoff,
 } from '../skin-log.mjs'
-import { checksLine } from '../skin-lib.mjs'
+import { checksLine, fontWords } from '../skin-lib.mjs'
 
 const tool = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 // The mod around this folder (the package: skin/skin-tool), or one named by RESKIN_MOD_DIR (a separate checkout).
@@ -393,3 +393,24 @@ test('a run stopped by a signal leaves its entry and notes the signal; the tool\
   const second = fs.readFileSync(file, 'utf8').slice(before)
   assert.ok(second.includes('cleanup done') && second.includes('stopped by SIGTERM')) // noted, while the tool's own handler did the exit
 })
+
+test('the Air look (6 Nov 2026): a refused name is logged with no debugger path, a missing font gives its reason', () => {
+  assert.equal(stepPath({ via: 'debugger, one click', exitCode: 2, output: 'The skin verc was retired.\nPORT_STATE: unknown' }), 'none (refused before anything ran)')
+  const s = outcome({ command: 'x', steps: [{ via: 'fonts card (colour helper)', exitCode: 5, output: 'Roboto is not installed on this Mac, so nothing was changed.' }], shown: 'Roboto is not installed on this Mac, so nothing was changed.', result: 'refused', exitCode: 5, portBefore: 'closed', portAfter: 'closed' })
+  assert.ok(s.includes('Roboto is not installed') && !s.includes('no reason line'))
+})
+test('the Air look (6 Nov 2026): reports name fonts in plain words, with no page counts', () => {
+  const src = fs.readFileSync(path.join(tool, 'skin-auto.mjs'), 'utf8')
+  assert.doesNotMatch(src, /Claude page\(s\)\)\. It stays/)
+  assert.doesNotMatch(src, /The font \$\{ack\.verified\.font\}/)
+  assert.doesNotMatch(src, /`\$\{prefs\.font\} when last set`/)
+  assert.match(src, /Fonts stay on: \$\{fontWords\(ack\.verified\.font\)\}/)
+})
+test('fontWords keeps sizes and weights, never a raw key', () => {
+  assert.match(fontWords('plex-16'), /IBM Plex Sans.*16px/)
+  assert.match(fontWords('chat.size.16'), /Chat text.*16px/)
+  assert.match(fontWords('headers.weight.600'), /semibold 600/)
+  assert.doesNotMatch(fontWords('ui.font.plex~headers.font.inter-tight'), /ui\.font|~/)
+  assert.match(fontWords('ui.font.plex~headers.font.inter-tight'), /IBM Plex Sans.*Inter Tight/)
+})
+

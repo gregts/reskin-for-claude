@@ -1,4 +1,4 @@
-// The no-skin tick (4 Nov 2026, design v2 to v4 in no-skin-tick-20261104/): `tick off [--want-font=] [--want-type=]`
+// The no-skin tick (4 Nov 2026): `tick off [--want-font=] [--want-type=]`
 // starts the colour helper only, then (debugger closed) the helper takes any skin off, a check must prove "no skin on",
 // and the frozen PLAN runs, stopping at the first part that does not complete. Nothing here reaches a real tick: every
 // command line run below is refused before its prompt, and every run that would get further is killed at READY_TO_TICK.
@@ -227,7 +227,7 @@ test('run limits: the no-skin tick adds the check wait and stays inside the mod\
   assert.match(autoSrc, /helperStart \? \(hasWants \? TICK\.runLimitStartWantsMs : TICK\.runLimitStartMs\)/)
 })
 
-// ---- Under the lock: an existing helper decides, before any prompt (design v4) ----
+// ---- Under the lock: an existing helper decides, before any prompt ----
 async function claudeProc() {
   const ps = spawnSync('/bin/ps', ['-ax', '-o', 'pid=,comm='], { encoding: 'utf8' })
   const line = ps.stdout.split('\n').find((l) => l.trim().endsWith(CLAUDE_BINARY))
@@ -271,6 +271,6 @@ test('tick off with a current helper: refused before any prompt, nothing sent; o
 })
 test('the active refusal is decided in main(), under the run lock, after the outdated and unknown guards', () => {
   const m = autoSrc.slice(autoSrc.indexOf('async function main()'), autoSrc.indexOf('  if (tickMode) return tickRun()'))
-  const lock = m.indexOf('lock = await acquireLock()'), outdated = m.indexOf("live.state === 'outdated'"), active = m.indexOf("helperStart && live.state === 'active'")
+  const lock = m.indexOf('lock = await acquireLockWaiting(lockWait.ms)'), outdated = m.indexOf("live.state === 'outdated'"), active = m.indexOf("helperStart && live.state === 'active'")
   assert.ok(lock > 0 && lock < outdated && outdated < active, 'lock, then the existing guards, then the new one')
 })

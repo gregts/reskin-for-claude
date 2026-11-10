@@ -2,6 +2,8 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On, Plugin, RenderElement } from 'claude-code'
 
 import { FONT_LABELS, FONT_WEIGHTS, SECTIONS, shortStatus, allPicks, defaultPicks, lookInfoOf, lookSummary, noLookText, picksOf, resultLineOf, setArgs, sizeOptions, weightOptions, withFont, fontOptions } from '../hooks/fonts'
+import { retiredText } from '../hooks/logic'
+import { chipsOf } from '../hooks/band'
 import { ABOUT, CARD, DEV_MODE, TIME_UP, START_DONE, START_FACTS, cardFacts, cardParagraph, planOf, startResult, startStatus, startSummary, countdownSvg, displayName, listText, modeOf, nodeCandidates, nodeMajorOk, noHelper, parse, skinSuggestions, oneClickOf, fontsOf, FONT_NAMES, argumentHintOf, summary, toolDirCandidates } from '../hooks/logic'
 
 const EM = String.fromCharCode(8212)
@@ -135,9 +137,11 @@ describe('summary', () => {
 
 // ---- the command end to end, with a fake file system, fake runs and a fake streamed run ----
 const TOOL = '/tool'
-type Answers = { look?: (argv: readonly string[]) => [number, string]; registerThrows?: boolean; defaults?: [number, string, string]; switch?: [number, string]; status?: [number, string]; check?: [number, string]; type?: [number, string]; tick?: string[]; tickCode?: number; spawn?: (argv: readonly string[], signal: AbortSignal) => AsyncGenerator<{ stream: 'stdout' | 'stderr'; text: string }, { value: { code: number | null; signal: string | null } }> }
+// Every helper verb the mod starts waits for the run lock (band, 5 Nov 2026); tests that only look at the verb drop it.
+const bare = (a: readonly string[]) => a.filter(x => x !== '--lock-wait=20000')
+type Answers = { logs?: string[]; presetFiles?: string[]; css?: (path: string) => string | undefined; listLater?: (path: string) => Promise<void> | undefined; runLater?: (argv: readonly string[]) => Promise<void> | undefined; slowSwitch?: () => AsyncGenerator<{ stream: 'stdout' | 'stderr'; text: string }, void>; store?: Record<string, unknown>; raw?: (readonly string[])[]; later?: (argv: readonly string[]) => Promise<void> | undefined; look?: (argv: readonly string[]) => [number, string] | Promise<[number, string]>; registerThrows?: boolean; defaults?: [number, string, string]; switch?: [number, string]; status?: [number, string]; check?: [number, string]; type?: [number, string]; tick?: string[]; tickCode?: number; spawn?: (argv: readonly string[], signal: AbortSignal) => AsyncGenerator<{ stream: 'stdout' | 'stderr'; text: string }, { value: { code: number | null; signal: string | null } }> }
 function world(on: On, a: Answers = {}) {
-  mock.store(on)
+  mock.store(on, a.store)
   const runs: (readonly string[])[] = []
   const spawns: (readonly string[])[] = []
   const toasts: string[] = []
@@ -148,9 +152,11 @@ function world(on: On, a: Answers = {}) {
   on('ui.toast', ($, e) => { toasts.push(e.text); return { value: undefined } })
   on('ui.status', ($, e) => { statuses.push(e.text); return { value: undefined } })
   on('ui.render', () => ({ type: 'engine', ref: 0 }) as RenderElement)
-  on('fs.list', ($, e) => {
+  on('fs.list', async ($, e) => {
+    await a.listLater?.(e.path)
     lists.push(e.path)
     if (e.path === TOOL) return { value: [{ name: 'skin-auto.mjs', kind: 'file', size: 1, mtimeMs: 0, isLink: false }, { name: 'presets', kind: 'dir', size: 1, mtimeMs: 0, isLink: false }] }
+    if (e.path === `${TOOL}/presets` && a.presetFiles) return { value: a.presetFiles.map(name => ({ name, kind: 'file', size: 1, mtimeMs: 0, isLink: false })) }
     if (e.path === `${TOOL}/presets`) return { value: [
       { name: 'dracula.css', kind: 'file', size: 1, mtimeMs: 0, isLink: false },
       { name: 'one-light.css', kind: 'file', size: 1, mtimeMs: 0, isLink: false },
@@ -158,10 +164,12 @@ function world(on: On, a: Answers = {}) {
     ] }
     throw new Error('no such folder')
   })
-  on('fs.read', ($, e) => ({ value: e.path.includes('light') ? '@media (prefers-color-scheme: light) {}' : '@media (prefers-color-scheme: dark) {}' }))
+  on('fs.read', ($, e) => ({ value: a.css?.(e.path) ?? (e.path.includes('light') ? '@media (prefers-color-scheme: light) {}' : '@media (prefers-color-scheme: dark) {}') }))
   const ok = (exitCode: number, stdout: string) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
-  on('process.run', ($, e) => {
-    runs.push(e.argv)
+  on('process.run', async ($, e) => {
+    await a.runLater?.(e.argv)
+    runs.push(bare(e.argv))
+    if (e.argv[0] === '/bin/sh' && a.logs) { a.logs.push(String((e as { init?: { stdin?: unknown } }).init?.stdin ?? '')); return ok(0, '') }
     if (e.argv[0] === '/usr/bin/defaults') return a.defaults ? { value: { exitCode: a.defaults[0], stdout: a.defaults[1], stderr: a.defaults[2], isStdoutTruncated: false, isStderrTruncated: false } } : ok(0, 'Dark\n')
     if (e.argv.at(-1) === '--version') return e.argv[0] === '/opt/homebrew/bin/node' ? ok(0, 'v26.1.0\n') : ok(1, '')
     if (e.argv[2] === 'switch') return ok(...(a.switch ?? [0, 'Skin x applied by the colour helper.\nPORT_STATE: closed\nRESULT: ok']))
@@ -169,27 +177,30 @@ function world(on: On, a: Answers = {}) {
     return ok(9, 'unexpected')
   })
   on('process.spawn', async function* ($, e, next) {
+    a.raw?.push(e.argv)
+    await a.later?.(e.argv)
     // Quick runs (switch, status) are streamed too since 0.6.0; they count as runs here, tick runs as spawns.
     if (e.argv[2] === 'type') {
-      runs.push(e.argv)
-      const [code, text] = a.type ?? [0, 'Type on: project headers with activity colours (1 of 1 Claude page(s)).\n(as the colour helper reports; no debugger checked it)\ndebugger: not used (switching needs no port)\nhelper: active until Claude quits (Claude 4.4212.0)\nPORT_STATE: closed\nRESULT: ok']
+      runs.push(bare(e.argv))
+      const [code, text] = a.type ?? [0, 'Type on: project headers with activity colours. It stays through skin changes and /skin off; /skin type off or /skin remove takes it off. Fonts stay on: IBM Plex Sans and Inter Tight.\n(as the colour helper reports; no debugger checked it)\ndebugger: not used (switching needs no port)\nhelper: active until Claude quits (Claude 4.4212.0)\nPORT_STATE: closed\nRESULT: ok']
       if (text) yield { stream: 'stdout', text }
       return { value: { code, signal: null } }
     }
     if (e.argv[2] === 'look') {
-      runs.push(e.argv)
-      const [code, text] = a.look ? a.look(e.argv) : [9, 'unexpected']
+      runs.push(bare(e.argv))
+      const [code, text] = a.look ? await a.look(e.argv) : [9, 'unexpected']
       if (text) yield { stream: 'stdout', text }
       return { value: { code, signal: null } }
     }
     if (e.argv[2] === 'check') {
-      runs.push(e.argv)
+      runs.push(bare(e.argv))
       const [code, text] = a.check ?? [0, 'health: pass (skin dracula shows its own colours in every place checked)\nchecked: dark mode only (the light half is checked when Claude shows light)\n(as the colour helper reports; no debugger checked it)\ndebugger: not used (the check needs no port)\nhelper: active until Claude quits (Claude 2.42304.0)\nPORT_STATE: closed\nRESULT: ok']
       if (text) yield { stream: 'stdout', text }
       return { value: { code, signal: null } }
     }
+    if (e.argv[2] === 'switch' && a.slowSwitch) { runs.push(bare(e.argv)); yield* a.slowSwitch(); return { value: { code: 0, signal: null } } }
     if (e.argv[2] === 'switch' || e.argv[2] === 'status') {
-      runs.push(e.argv)
+      runs.push(bare(e.argv))
       const [code, text] = e.argv[2] === 'switch' ? (a.switch ?? [0, 'Skin x applied by the colour helper.\nPORT_STATE: closed\nRESULT: ok']) : (a.status ?? [0, 'helper: none (no helper session)\nlast skin: dracula\nReapply dracula? Run: /skin dracula\nPORT_STATE: closed\nRESULT: ok'])
       yield { stream: 'stdout', text }
       return { value: { code, signal: null } }
@@ -553,6 +564,12 @@ RESULT: failed`
   const open = summary('dracula', 4, out.replace('PORT_STATE: closed', 'PORT_STATE: open'), '')
   expect(open.split('\n')[0]).toBe(TIME_UP)
   expect(open).toContain('PORT 9229 IS NOT CONFIRMED CLOSED')
+  // Any other warning (the second look at the port, a menu tick that may remain) is never dropped on this path.
+  const reopened = 'WARNING: the debugger opened again after this run had closed it, most likely from another click on Developer > Enable Main Process Debugger. Do not click that item again; the next /skin run asks when a click is needed.'
+  const both = summary('dracula', 4, out.replace('PORT_STATE: closed', `${reopened}\nPORT_STATE: closed`), '')
+  expect(both.split('\n')[0]).toBe(TIME_UP)
+  expect(both).toContain(reopened)
+  expect(both).not.toContain('WARNING: Time is up')
 })
 
 describe('typeahead for /skin', () => {
@@ -678,12 +695,14 @@ describe('fonts (3 Nov 2026)', () => {
   })
   test('typeahead after font offers font names, off and list where fonts are shipped, never skin names', () => {
     const at = (draft: string, fonts = true) => skinSuggestions(draft, draft.lastIndexOf(' ') + 1, draft.length, ['nord', 'noir'], false, fonts).map(r => r.text)
-    expect(at('/skin font n')).toEqual(['noto', 'inter-tight', 'zen-maru'])
+    expect(at('/skin font n')).toEqual(['noto', 'inter-tight', 'zen-maru', 'commissioner', 'jetbrains'])
     expect(at('/skin font l')).toEqual(['literata', 'lato', 'list', 'plex'])
-    expect(at('/skin font o')).toEqual(['off', 'noto', 'roboto', 'lato'])
+    expect(at('/skin font o')).toEqual(['off', 'noto', 'roboto', 'lato', 'commissioner'])
     expect(at('/skin font n', false)).toEqual([])
     expect(at('/skin font noto')).toEqual([])
-    expect(FONT_NAMES.length).toBe(7)
+    expect(FONT_NAMES.length).toBe(9)
+    expect(at('/skin font j')).toEqual(['jetbrains'])
+    expect(at('/skin font a')).toEqual(['literata', 'lato', 'zen-maru', 'jetbrains'])
   })
   test('the restore line after a tick always shows, whether it worked, partly worked or got no answer', () => {
     const base = 'sampled colour checks: 5 of 5 passed (0 unknown)\ndebugger: confirmed closed\nhelper: active until Claude quits\nPORT_STATE: closed\nRESULT: ok\n'
@@ -795,13 +814,17 @@ describe('fonts card helpers', () => {
 const FONTS_WORLD = (on: On, a: Answers) => {
   const w = world(on, a)
   on('fs.exists', ($, e) => ({ value: false })) // no release.json: the owner's copy, fonts shipped
+  // The band's newest stored state, seen on its way down (layout C keeps the proof out of the labels).
+  lastBand = null
+  on('state.set', async ($, e, next) => { const x = e as { plugin?: string; key?: string; value?: unknown }; if (x.plugin === 'skin' && x.key === 'band') lastBand = x.value as Band; return next(e) })
   return w
 }
+let lastBand: Band | null = null
 const LOOK_SHOW = 'LOOK: {"helper":"active","look":["chat.size.16"],"type":"on","parts":[]}\nfonts: Chat text: the same font as everything else, 16px\ndebugger: not used (switching needs no port)\nPORT_STATE: closed\nRESULT: ok'
 test('/skin fonts draws the card with four dropdowns; picks stay in the card until Apply, which sends one part through the helper', OPTS, async ($, on) => {
   const sent: (readonly string[])[] = []
   const w = FONTS_WORLD(on, { look: (argv) => {
-    sent.push(argv.slice(2))
+    sent.push(bare(argv.slice(2)))
     if (argv[3] === 'show') return [0, LOOK_SHOW]
     return [0, 'LOOK: {"helper":"active","look":["chat.size.16","rows.font.roboto","rows.size.13"],"type":"on","parts":[]}\nSidebar rows done. Fonts now: Chat text: the same font as everything else, 16px; Sidebar rows: Roboto, 13px.\n(as the colour helper reports; no debugger checked it)\ndebugger: not used (switching needs no port)\nPORT_STATE: closed\nRESULT: ok']
   } })
@@ -853,7 +876,7 @@ test('/skin fonts with no colour helper says how to start one and offers no Appl
 
 test('two Apply presses at once start one tool run; the card is never left busy', OPTS, async ($, on) => {
   const sent: (readonly string[])[] = []
-  FONTS_WORLD(on, { look: (argv) => { sent.push(argv.slice(2)); return [0, argv[3] === 'show' ? LOOK_SHOW : 'LOOK: {"helper":"active","look":["chat.size.16"],"type":"on","parts":[]}\nChat text done.\nPORT_STATE: closed\nRESULT: ok'] } })
+  FONTS_WORLD(on, { look: (argv) => { sent.push(bare(argv.slice(2))); return [0, argv[3] === 'show' ? LOOK_SHOW : 'LOOK: {"helper":"active","look":["chat.size.16"],"type":"on","parts":[]}\nChat text done.\nPORT_STATE: closed\nRESULT: ok'] } })
   await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
   await $.command.run(cmd('fonts'))
   const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
@@ -870,7 +893,7 @@ test('two Apply presses at once start one tool run; the card is never left busy'
 test('All parts sets one font for the whole app in one Apply, and shows what the helper proved for every part', OPTS, async ($, on) => {
   const sent: (readonly string[])[] = []
   FONTS_WORLD(on, { look: (argv) => {
-    sent.push(argv.slice(2))
+    sent.push(bare(argv.slice(2)))
     if (argv[3] === 'show') return [0, 'LOOK: {"helper":"active","look":["chat.font.literata","chat.size.16","rows.font.roboto"],"type":"on","parts":[]}\nRESULT: ok']
     return [0, 'LOOK: {"helper":"active","look":["ui.font.noto","chat.size.16"],"type":"on","parts":[]}\nAll parts done. Fonts now: x.\nPORT_STATE: closed\nRESULT: ok']
   } })
@@ -897,21 +920,23 @@ test('the card status is a word when it worked and one short reason when it did 
   expect(shortStatus('failed', 'x'.repeat(300), false).length).toBe(118)
 })
 
-// An opener another band mod draws (the owner's usage-line hosts one): pressing it opens the card, once, and never resets it.
+// An opener another band mod draws: pressing it opens the card, once, and never resets it.
 const OPENER: Plugin = { name: 'bar-host', register: (on) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e) => { const { Button } = $.ui.resolve(e); return Button({ key: 'skin-fonts-open', label: 'Fonts', plain: true, dimColor: true, onPress: () => {} }) })
 } }
-test('a Fonts button in another mod toggles the card (no ✕ then); opened by /skin fonts it has a ✕ that gives the way back', { ...OPTS, plugins: [OPENER] }, async ($, on) => {
+test('a Fonts button in another mod toggles the card (a ✕ too, since the band); opened by /skin fonts it has a ✕ that gives the way back', { ...OPTS, plugins: [OPENER] }, async ($, on) => {
   const sent: (readonly string[])[] = []
-  const w = FONTS_WORLD(on, { look: (argv) => { sent.push(argv.slice(2)); return [0, LOOK_SHOW] } })
+  const w = FONTS_WORLD(on, { look: (argv) => { sent.push(bare(argv.slice(2))); return [0, LOOK_SHOW] } })
   await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
   const host = await $.ui.mount({ plugin: 'bar-host', surface: 'desktop', ...BAND })
   await host.press({ key: 'skin-fonts-open' })
   await host.unmount()
   expect(sent).toEqual([['look', 'show']])
   const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
-  expect(await ui.find({ type: 'Text', text: 'Fonts' })).toBeDefined()
-  expect(await ui.find({ key: 'skin-fonts-close' })).toBeUndefined() // the opener closes it
+  // Hosted by another band (the band itself off): the row alone, no label of its own (the host's opener names it).
+  expect(await ui.find({ key: 'skin-fonts-section' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Fonts' })).toBeUndefined()
+  expect(await ui.find({ key: 'skin-fonts-close' })).toBeDefined() // ✕ always shown; the opener closes it too
   await ui.unmount()
   const host2 = await $.ui.mount({ plugin: 'bar-host', surface: 'desktop', ...BAND })
   await host2.press({ key: 'skin-fonts-open' })
@@ -929,7 +954,7 @@ test('a Fonts button in another mod toggles the card (no ✕ then); opened by /s
 })
 
 
-// ---- the no-skin tick (4 Nov 2026, design v2 to v4) ----
+// ---- the no-skin tick (4 Nov 2026) ----
 const PLAN_LINE = 'PLAN: {"skin":null,"headers":true,"look":"plex-14","parts":[{"part":"look","value":"plex-14","asked":true},{"part":"headers","value":true,"asked":false}],"words":"sets the fonts (Everything else: IBM Plex Sans; Chat text: the same font as everything else, 14px) and turns on the project headers, as last time"}'
 const START_READY = 'Ready. Before you tick, so nothing surprises you:\n- This starts the colour helper only. No skin is put on. Any Reskin skin is taken off. A Claude page may reload once.\n- A "chrome://inspect" tab will open in Chrome. Close it.\n- After this, a small colour helper stays inside Claude until you quit Claude. It can only switch between Reskin\'s own presets, fonts and headers, turn them off, or remove itself; the next change needs no tick.\nNOW: click.\n'
 describe('no-skin tick', () => {
@@ -1075,4 +1100,1000 @@ test('the no-skin card: title, disclosure and plan from a PLAN line split across
   finish()
   await clock.advance(0)
   await running
+})
+
+
+// ---- the appearance band (5 Nov 2026, design 2) ----
+import { BAND0, OPENER_LABELS, actionOf, bandStatusOf, bandWord, proofOf, rowState, skinOptions } from '../hooks/band'
+import type { Band, Proof } from '../hooks/band'
+// What the band's proof claims now (layout C shows no claims in the labels; the proof still sets the accent, the row's
+// helper state and the dropdown's starting value). The old label words, read from Reskin's stored band state, so the
+// read-ordering tests below keep checking which read won.
+function claimWords(p: Proof | null): string[] {
+  if (p === null || p.helper !== 'active') return ['Skins', 'Fonts', 'Sidebar']
+  const skin = p.skin === 'unknown' ? 'Skins' : p.skin === 'off' ? "Skins: Claude's" : `Skins: ${p.skin === 'vs' ? 'VS' : p.skin.split('-').map(w => w[0]!.toUpperCase() + w.slice(1)).join(' ')}`
+  return [skin, 'Fonts', p.sidebar === 'on' ? 'Sidebar: On' : p.sidebar === 'off' ? 'Sidebar: Off' : 'Sidebar']
+}
+const claims = async (_$: unknown) => claimWords(lastBand?.proof ?? null)
+// The three openers' words (none open: each a plain Button with its label).
+const openerWords = async (ui: { find: (q: { key: string }) => Promise<unknown> }) => Promise.all(['skin-skins-open', 'skin-fonts-open', 'skin-sidebar-open'].map(async k => ((await ui.find({ key: k })) as { props?: { label?: string } } | undefined)?.props?.label))
+const PROVEN = 'LOOK: {"helper":"active","look":[],"type":"on","parts":[],"skin":"dracula","sidebar":"on","mode":"dark","accent":"#bd93f9"}\nfonts: Claude\'s own everywhere\nPORT_STATE: closed\nRESULT: ok'
+const UNPROVEN = 'LOOK: {"helper":"active","look":[],"type":"on","parts":[],"skin":"unknown","sidebar":"unknown","mode":"unknown","accent":null}\nPORT_STATE: closed\nRESULT: ok'
+const NONE = 'LOOK: {"helper":"none"}\nNo colour helper is running in this Claude (no helper session), so nothing was changed.\nPORT_STATE: closed\nRESULT: refused'
+const BAR: Plugin = { name: 'bar-host', register: (on) => {
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e) => { const { Button, Box } = $.ui.resolve(e); return Box({ children: [Button({ key: 'skin-skins-open', label: 'Skins', plain: true, onPress: () => {} }), Button({ key: 'skin-sidebar-open', label: 'Sidebar', plain: true, onPress: () => {} }), Button({ key: 'skin-fonts-open', label: 'Fonts', plain: true, onPress: () => {} })] } as never) })
+} }
+// Another mod drawing a button with Reskin's own setup key: its press must never start anything.
+const FAKE: Plugin = { name: 'fake-host', register: (on) => {
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => { const { Button, Box } = $.ui.resolve(e); const below = await next(e); return Box({ children: [Button({ key: 'skin-band-setup', label: 'x', plain: true, onPress: () => {} }), ...(below && (below as { type?: string }).type !== 'engine' ? [below] : [])] } as never) })
+} }
+
+describe('band helpers', () => {
+  test('proof is read strictly: claims only from an active helper, accent only as #rrggbb with a proven skin and mode', () => {
+    expect(proofOf(PROVEN)).toEqual({ helper: 'active', skin: 'dracula', sidebar: 'on', mode: 'dark', accent: '#bd93f9' })
+    expect(proofOf(NONE)).toEqual({ helper: 'none', skin: 'unknown', sidebar: 'unknown', mode: 'unknown', accent: null })
+    expect(proofOf('LOOK: {"helper":"active","skin":"dracula","mode":"unknown","accent":"#bd93f9"}').accent).toBe(null)
+    expect(proofOf('LOOK: {"helper":"active","skin":"off","mode":"dark","accent":"#bd93f9"}').accent).toBe(null)
+    for (const bad of ['#BD93F9', 'red', '#bd93f9; x', 'var(--x)']) expect(proofOf(`LOOK: {"helper":"active","skin":"dracula","mode":"dark","accent":${JSON.stringify(bad)}}`).accent).toBe(null)
+    expect(proofOf('LOOK: {"helper":"active","skin":"../x"}').skin).toBe('unknown')
+    expect(proofOf('LOOK: {"helper":"active","sidebar":true}').sidebar).toBe('unknown')
+    expect(proofOf('no look line').helper).toBe('unread')
+    expect(proofOf('LOOK: not json').helper).toBe('unread')
+  })
+  test('layout C: opener labels are always the plain words; a status is kept whole up to 400 characters', () => {
+    expect(OPENER_LABELS).toEqual({ skins: 'Skins', fonts: 'Fonts', sidebar: 'Sidebar' })
+    expect(bandStatusOf('Skin nord applied by the colour helper; 5 of 5 colour checks passed, debugger not used.', '', 0)).not.toMatch(/…$/) // no 90-character cut
+    expect(bandStatusOf('x'.repeat(500), '', 0)).toHaveLength(400)
+  })
+  test('every button has fixed tool arguments; only setup ticks, in tick mode, never one-click', () => {
+    const d = { skin: 'nord', sidebar: 'off' as const }
+    expect(actionOf('skins', 'apply', d)).toEqual({ runner: 'quick', args: ['switch', 'nord'] })
+    expect(actionOf('skins', 'reset', d)).toEqual({ runner: 'quick', args: ['switch', 'off'] })
+    expect(actionOf('skins', 'setup', d)).toEqual({ runner: 'tick', args: ['tick', 'nord'] })
+    expect(actionOf('skins', 'setup', { ...d, skin: 'off' })).toEqual({ runner: 'tick', args: ['tick', 'off'] })
+    expect(actionOf('skins', 'apply', { ...d, skin: '--one-click' })).toEqual({ runner: 'quick', args: ['switch', 'off'] })
+    expect(actionOf('sidebar', 'apply', d)).toEqual({ runner: 'quick', args: ['type', 'off'] })
+    expect(actionOf('sidebar', 'reset', d)).toBe(null)
+    expect(actionOf('sidebar', 'setup', d)).toEqual({ runner: 'tick', args: ['tick', 'off', '--want-type=off'] })
+    expect(actionOf('fonts', 'setup', d)).toEqual({ runner: 'tick', args: ['tick', 'off'] })
+    expect(actionOf('fonts', 'apply', d)).toBe(null)
+    for (const r of ['skins', 'sidebar', 'fonts'] as const) for (const b of ['apply', 'reset', 'setup'] as const) expect(JSON.stringify(actionOf(r, b, d))).not.toMatch(/one-click|remove/)
+  })
+  test('helper states: only a proven none offers setup', () => {
+    expect(rowState('active')).toEqual({ controls: true, setup: false, text: '' })
+    expect(rowState('none')).toEqual({ controls: true, setup: true, text: '' })
+    for (const h of ['old', 'outdated', 'unknown', 'noanswer', 'unread', 'x']) { expect(rowState(h).setup).toBe(false); expect(rowState(h).controls).toBe(false) }
+  })
+  test('band words, and the skin list ends with Claude\'s own colours', () => {
+    expect(bandWord('band on')).toBe(true); expect(bandWord(' BAND off ')).toBe(false)
+    for (const b of ['band', 'band maybe', 'band on off']) expect(bandWord(b)).toBe('bad')
+    expect(bandWord('dracula')).toBe(null)
+    expect(skinOptions(['nord', 'vs']).map(o => o.label)).toEqual(['Nord', 'VS', "Claude's own colours"])
+  })
+})
+
+test('/skin band on draws three openers, remembered; their proof (name, On, accent) is held from the read, the labels stay plain', OPTS, async ($, on) => {
+  let answer = UNPROVEN
+  const w = FONTS_WORLD(on, { look: () => [0, answer] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const before = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await before.find({ key: 'skin-skins-open' })).toBeUndefined() // off by default
+  await before.unmount()
+  expect((await $.command.run(cmd('band on'))).text).toMatch(/Appearance band on/)
+  await new Promise(r => setTimeout(r, 20))
+  let ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await claims($)).toEqual(['Skins', 'Fonts', 'Sidebar'])
+  await ui.unmount()
+  answer = PROVEN
+  await $.command.run(cmd('band on'))
+  await new Promise(r => setTimeout(r, 20))
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await claims($)).toEqual(['Skins: Dracula', 'Fonts', 'Sidebar: On'])
+  expect(await openerWords(ui)).toEqual(['Skins', 'Fonts', 'Sidebar']) // layout C: the labels never show the claims
+  await ui.unmount()
+  // A typed change clears the claims at once (and they come back only from a new read).
+  answer = UNPROVEN
+  await $.command.run(cmd('one-light'))
+  await new Promise(r => setTimeout(r, 20))
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await claims($)).toEqual(['Skins', 'Fonts', 'Sidebar'])
+  await ui.unmount()
+  expect((await $.command.run(cmd('band off'))).text).toMatch(/band off/)
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await ui.find({ key: 'skin-skins-open' })).toBeUndefined()
+  await ui.unmount()
+  void w
+})
+
+test('the band stays on across sessions (remembered), with plain words until its first read answers', { ...OPTS }, async ($, on) => {
+  FONTS_WORLD(on, { store: { band: true }, look: () => [0, PROVEN] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await new Promise(r => setTimeout(r, 20))
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect((await claims($))[0]).toBe('Skins: Dracula')
+  await ui.unmount()
+})
+
+test('Skins row: the pick is a draft; Apply switches through the helper with a lock wait, never a tick; the label follows proof only', OPTS, async ($, on) => {
+  const raw: (readonly string[])[] = []
+  let answer = PROVEN
+  const w = FONTS_WORLD(on, { raw, look: () => [0, answer] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  await new Promise(r => setTimeout(r, 20))
+  let ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-skins-open' })
+  await new Promise(r => setTimeout(r, 20))
+  await ui.unmount()
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  const sel = await ui.find({ key: 'skin-band-skin' })
+  expect(sel).toBeDefined()
+  expect((sel as { props: { value: string } }).props.value).toBe('dracula') // the proven skin
+  await ui.select({ key: 'skin-band-skin', value: 'one-light' })
+  await ui.unmount()
+  expect(raw.filter(a => a[2] === 'switch')).toHaveLength(0) // a pick changes nothing
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await ui.find({ key: 'skin-band-reset' })).toBeDefined()
+  expect(await ui.find({ key: 'skin-band-close' })).toBeDefined()
+  await ui.press({ key: 'skin-band-apply' })
+  await ui.unmount()
+  await new Promise(r => setTimeout(r, 20))
+  const sw = raw.filter(a => a[2] === 'switch')
+  expect(sw.map(a => a.slice(2))).toEqual([['switch', 'one-light', '--lock-wait=20000']])
+  expect(w.spawns).toHaveLength(0) // no tick
+  void answer
+})
+
+test('layout C: the open row holds each dropdown in a box that never shrinks, at its natural width, no "Project headers" label', OPTS, async ($, on) => {
+  FONTS_WORLD(on, { look: () => [0, PROVEN] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  await new Promise(r => setTimeout(r, 20))
+  for (const [opener, sel] of [['skin-skins-open', 'skin-band-skin'], ['skin-sidebar-open', 'skin-band-sidebar']] as const) {
+    let ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+    await ui.press({ key: opener })
+    await new Promise(r => setTimeout(r, 20))
+    await ui.unmount()
+    ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+    const box = (await ui.find({ key: `${sel}-box` })) as { props: { width: number; minWidth: number; flexShrink: number } } | undefined
+    expect(box).toBeDefined()
+    expect(box!.props.flexShrink).toBe(0)
+    expect(box!.props.width).toBeUndefined() // natural width (the owner's live look 2: a guessed width left wide gaps)
+    expect(box!.props.minWidth).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: 'Project headers' } as never)).toBeUndefined()
+    expect(await ui.find({ key: 'skin-band-apply' })).toBeDefined()
+    expect(await ui.find({ key: 'skin-band-close' })).toBeDefined()
+    // the owner's live look: a gap under the openers, the ✕ alone at the far right after a spacer, the choices at the left.
+    const rowBox = (await ui.find({ key: 'skin-band-row' })) as { props: { paddingTop?: number } } | undefined
+    expect(rowBox?.props.paddingTop).toBe(1)
+    const rowLine = await ui.find({ key: 'skin-band-rowline' })
+    const kids = ((rowLine as { children?: { props?: { key?: string; flexGrow?: number } }[] } | undefined)?.children ?? [])
+    expect(kids.map(k => k.props?.key)).toEqual(['skin-band-line', undefined, 'skin-band-close-cell'])
+    expect(kids[1]?.props?.flexGrow).toBe(1)
+    expect(await openerWords(ui)).toEqual(['Skins', 'Fonts', 'Sidebar']) // plain words, the open one too
+    await ui.press({ key: 'skin-band-close' })
+    await ui.unmount()
+  }
+})
+
+test('layout C: the fonts row (typed and from the band) wraps whole non-shrinking dropdowns, Apply and Reset together, at 40 to 100 cells', OPTS, async ($, on) => {
+  FONTS_WORLD(on, { look: () => [0, LOOK_SHOW] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  type Found = { props: Record<string, unknown> } | undefined
+  const checkRow = async (cols: number, line: string) => {
+    const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND, props: { ...BAND.props, bodyColumns: cols } })
+    await ui.select({ key: 'skin-fonts-section', value: 'chat' }) // the widest part: four dropdowns
+    const row = (await ui.find({ key: line })) as Found
+    expect(row?.props.flexWrap).toBe('wrap')
+    for (const k of ['skin-fonts-section', 'skin-fonts-font', 'skin-fonts-size', 'skin-fonts-weight']) {
+      const box = (await ui.find({ key: `${k}-box` })) as Found
+      expect(box?.props.flexShrink).toBe(0)
+      expect(box?.props.width).toBeUndefined()
+    }
+    const actions = (await ui.find({ key: 'skin-band-actions' })) as Found
+    expect(actions?.props.flexShrink).toBe(0)
+    expect(await ui.find({ key: 'skin-fonts-reset' })).toBeDefined()
+    await ui.unmount()
+  }
+  // Typed /skin fonts with the band off.
+  await $.command.run(cmd('fonts'))
+  for (const cols of [40, 60, 80, 100]) await checkRow(cols, 'skin-fonts-line')
+  let ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-fonts-close' })
+  await ui.unmount()
+  // The band's Fonts opener.
+  await $.command.run(cmd('band on'))
+  await new Promise(r => setTimeout(r, 20))
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-fonts-open' })
+  await new Promise(r => setTimeout(r, 20))
+  await ui.unmount()
+  for (const cols of [40, 60, 80, 100]) await checkRow(cols, 'skin-band-line')
+})
+
+test('no helper: Apply is replaced by one setup button, which ticks in tick mode; another plugin can open a row but not press its buttons', { ...OPTS, plugins: [BAR] }, async ($, on) => {
+  const raw: (readonly string[])[] = []
+  const w = FONTS_WORLD(on, { raw, look: () => [5, NONE] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const host = await $.ui.mount({ plugin: 'bar-host', surface: 'desktop', ...BAND })
+  await host.press({ key: 'skin-sidebar-open' }) // the band itself is off: the row opens alone, hosted
+  await new Promise(r => setTimeout(r, 20))
+  await host.unmount()
+  let ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await ui.find({ key: 'skin-band-apply' })).toBeUndefined()
+  expect(await ui.find({ key: 'skin-band-setup' })).toBeDefined()
+  expect(await ui.find({ key: 'skin-band-close' })).toBeDefined()
+  await ui.select({ key: 'skin-band-sidebar', value: 'off' })
+  await ui.press({ key: 'skin-band-setup' })
+  await ui.unmount()
+  await new Promise(r => setTimeout(r, 20))
+  expect(w.spawns.map(a => a.slice(2))).toEqual([['tick', 'off', '--want-type=off']])
+  expect(raw.filter(a => a.includes('--one-click') || a[2] === 'one-click')).toHaveLength(0)
+})
+
+test('helper states the row cannot act on: old says quit and reopen, an unreadable answer says try again; no buttons', OPTS, async ($, on) => {
+  let answer = 'LOOK: {"helper":"old"}\nRESULT: refused'
+  FONTS_WORLD(on, { look: () => [5, answer] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  let ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-skins-open' })
+  await new Promise(r => setTimeout(r, 20))
+  await ui.unmount()
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(((await ui.find({ type: 'Text', text: /quit and reopen Claude/ } as never)) as { props: { wrap?: string } }).props.wrap).toBe('wrap') // wrapped, never cut
+  // the owner's live look 2: messages sit last in the wrapping group (after Reset when they fit), in a box that may shrink.
+  const lineKids = (((await ui.find({ key: 'skin-band-line' })) as { children?: { props?: { key?: string; flexShrink?: number; minWidth?: number } }[] } | undefined)?.children ?? [])
+  expect(lineKids.at(-1)?.props?.key).toBe('skin-band-notes')
+  expect(lineKids.at(-1)?.props?.minWidth).toBe(0)
+  for (const k of ['skin-band-apply', 'skin-band-reset', 'skin-band-setup']) expect(await ui.find({ key: k })).toBeUndefined()
+  expect(await ui.find({ key: 'skin-band-close' })).toBeDefined()
+  await ui.press({ key: 'skin-band-close' })
+  await ui.unmount()
+  answer = 'garbage'
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-sidebar-open' })
+  await new Promise(r => setTimeout(r, 20))
+  await ui.unmount()
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await ui.find({ type: 'Text', text: /Could not reach the colour helper/ } as never)).toBeDefined()
+  expect(await ui.find({ key: 'skin-band-setup' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('one row at a time: Fonts replaces Skins, an opener pressed again closes its row', OPTS, async ($, on) => {
+  FONTS_WORLD(on, { look: () => [0, PROVEN] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  let ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-skins-open' })
+  await new Promise(r => setTimeout(r, 20))
+  await ui.press({ key: 'skin-fonts-open' })
+  await new Promise(r => setTimeout(r, 20))
+  await ui.unmount()
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await ui.find({ key: 'skin-band-skin' })).toBeUndefined()
+  expect(await ui.find({ key: 'skin-fonts-section' })).toBeDefined()
+  await ui.press({ key: 'skin-fonts-open' })
+  await ui.unmount()
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await ui.find({ key: 'skin-fonts-section' })).toBeUndefined()
+  expect(await ui.find({ key: 'skin-skins-open' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a read begun before a change never shows its claims; a typed command during a read still runs (with a lock wait)', OPTS, async ($, on) => {
+  const clock = mock.clock(on)
+  const raw: (readonly string[])[] = []
+  let calls = 0
+  FONTS_WORLD(on, { raw, look: async () => { calls++; if (calls === 1) await clock.sleep(5_000); return [0, calls === 1 ? PROVEN : UNPROVEN] } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  void $.command.run(cmd('band on')) // starts the slow read
+  await clock.settle()
+  const typed = $.command.run(cmd('one-light')) // arrives during the read: not refused by the mod
+  await clock.settle()
+  await clock.advance(6_000)
+  const r = await typed
+  expect(r.text).not.toMatch(/already running/)
+  expect(raw.find(a => a[2] === 'switch')?.slice(2)).toEqual(['switch', 'one-light', '--lock-wait=20000'])
+  await clock.advance(1_000)
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect((await claims($))[0]).toBe('Skins') // the old read was dropped
+  await ui.unmount()
+})
+
+test('a change slower than its limit is not ended: the answer says it is still finishing, and a tick waits for it', OPTS, async ($, on) => {
+  const clock = mock.clock(on)
+  let pulled = 0
+  // The slow change prints one line at 42 s (after the mod stopped waiting) and its result at 45 s: both are drained.
+  const w = FONTS_WORLD(on, { look: () => [0, UNPROVEN], slowSwitch: async function* () {
+    await clock.sleep(42_000); pulled++; yield { stream: 'stdout', text: 'still working\n' }
+    await clock.sleep(3_000); pulled++; yield { stream: 'stdout', text: 'Skin one-light applied.\nRESULT: ok\n' }
+  } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const first = $.command.run(cmd('one-light'))
+  await clock.settle()
+  await clock.advance(41_000) // past 20 s + the 20 s lock wait
+  const r = await first
+  expect(r.text).toMatch(/still finishing/)
+  // A tick typed now waits for that change to end (it ends at 45 s), then starts.
+  const tick = $.command.run(cmd('dracula --tick'))
+  await clock.settle()
+  expect(w.spawns).toHaveLength(0)
+  await clock.advance(5_000)
+  await clock.settle()
+  expect(w.spawns.map(a => a.slice(2))).toEqual([['tick', 'dracula']])
+  expect(pulled).toBe(2) // drained to its end, never cut off
+  await clock.advance(60_000)
+  await tick
+})
+
+test('a tick whose wait for earlier work runs out is refused without starting', OPTS, async ($, on) => {
+  const clock = mock.clock(on)
+  const w = FONTS_WORLD(on, { look: () => [0, UNPROVEN], later: async (argv) => { if (argv[2] === 'switch') await clock.sleep(200_000) } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const first = $.command.run(cmd('one-light'))
+  await clock.settle(); await clock.advance(41_000)
+  expect((await first).text).toMatch(/still finishing/)
+  const tick = $.command.run(cmd('dracula --tick'))
+  await clock.settle(); await clock.advance(26_000)
+  expect((await tick).text).toMatch(/still finishing; try again/)
+  expect(w.spawns).toHaveLength(0)
+})
+
+test('a button with Reskin\'s setup key drawn by another mod starts nothing', { ...OPTS, plugins: [FAKE, BAR] }, async ($, on) => {
+  const w = FONTS_WORLD(on, { look: () => [5, NONE] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const host = await $.ui.mount({ plugin: 'bar-host', surface: 'desktop', ...BAND })
+  await host.press({ key: 'skin-sidebar-open' })
+  await host.unmount()
+  await new Promise(r => setTimeout(r, 20))
+  const fake = await $.ui.mount({ plugin: 'fake-host', surface: 'desktop', ...BAND })
+  await fake.press({ key: 'skin-band-setup' })
+  await fake.unmount()
+  await new Promise(r => setTimeout(r, 20))
+  expect(w.spawns).toHaveLength(0)
+})
+
+// ---- band fixes (5 Nov 2026), part 1 ----
+test('band: a failed setup keeps the whole answer visible, debugger warning included', OPTS, async ($, on) => {
+  const w = FONTS_WORLD(on, { look: () => [5, NONE], tickCode: 3, tick: ['READY_TO_TICK\n', 'Something went wrong after the tick.\nUntick Developer > Enable Main Process Debugger now: the debugger port may still be open.\nPORT_STATE: open\nRESULT: failed\n'] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-sidebar-open' })
+  await new Promise(r => setTimeout(r, 20))
+  await ui.unmount()
+  const ui2 = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui2.press({ key: 'skin-band-setup' })
+  await ui2.unmount()
+  await new Promise(r => setTimeout(r, 20))
+  expect(w.spawns).toHaveLength(1)
+  expect(w.toasts.some(t => /Enable Main Process Debugger/.test(t))).toBe(true)
+  expect(w.statuses.some(t => typeof t === 'string' && /Enable Main Process Debugger/.test(t))).toBe(true)
+})
+
+test('band: one operation at a time: an opener pressed while a typed /skin fonts reads is refused with a note', { ...OPTS, plugins: [BAR] }, async ($, on) => {
+  const clock = mock.clock(on)
+  let n = 0
+  FONTS_WORLD(on, { look: async () => { n++; if (n === 1) await clock.sleep(5_000); return [0, PROVEN] } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  await clock.advance(6_000) // the band-on read
+  n = 0
+  const p1 = $.command.run(cmd('fonts')) // a slow Fonts opening (its read takes 5 s)
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-sidebar-open' }) // a newer opening, while the Fonts read is still going
+  await clock.advance(6_000)
+  await p1
+  expect(n).toBeGreaterThanOrEqual(1) // the slow Fonts read really ran
+  await ui.unmount()
+  const ui2 = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await ui2.find({ key: 'skin-fonts-section' })).toBeDefined()
+  expect(await ui2.find({ key: 'skin-band-sidebar' })).toBeUndefined()
+  await ui2.unmount()
+})
+
+test('band: /skin band off closes the fonts row too', OPTS, async ($, on) => {
+  FONTS_WORLD(on, { look: () => [0, PROVEN] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  await $.command.run(cmd('fonts'))
+  await $.command.run(cmd('band off'))
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await ui.find({ key: 'skin-fonts-section' })).toBeUndefined()
+  expect(await ui.find({ key: 'skin-band-skin' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('band: a command typed while the Fonts opener reads is not refused by the mod', OPTS, async ($, on) => {
+  const clock = mock.clock(on)
+  FONTS_WORLD(on, { look: async () => { await clock.sleep(5_000); return [0, PROVEN] } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  void $.command.run(cmd('band on'))
+  await clock.settle(); await clock.advance(6_000)
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  const pressed = ui.press({ key: 'skin-fonts-open' })
+  await clock.settle()
+  const r = $.command.run(cmd('status'))
+  await clock.advance(6_000)
+  expect((await r).text).not.toMatch(/already running/)
+  await pressed
+  await ui.unmount()
+})
+
+test('band: a change during an older read gets a fresh read afterwards, whose claims show', OPTS, async ($, on) => {
+  const clock = mock.clock(on)
+  let n = 0
+  FONTS_WORLD(on, { look: async () => { n++; if (n === 1) { await clock.sleep(5_000); return [0, UNPROVEN] } return [0, PROVEN] } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  void $.command.run(cmd('band on'))
+  await clock.settle()
+  const typed = $.command.run(cmd('one-light'))
+  await clock.settle()
+  await clock.advance(6_000)
+  await typed
+  await clock.advance(1_000)
+  expect(n).toBe(2)
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect((await claims($))[0]).toBe('Skins: Dracula')
+  await ui.unmount()
+})
+
+test('band: a read that runs out of time stops holding up a tick once its tool has ended', OPTS, async ($, on) => {
+  const clock = mock.clock(on)
+  const w = FONTS_WORLD(on, { look: async () => { await clock.sleep(16_000); return [0, PROVEN] } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  void $.command.run(cmd('band on'))
+  await clock.settle()
+  const tick = $.command.run(cmd('dracula --tick'))
+  await clock.settle()
+  expect(w.spawns).toHaveLength(0)
+  await clock.advance(15_500) // the read's 15 s deadline: the band is free, but its tool is still running
+  await clock.settle()
+  expect(w.spawns).toHaveLength(0)
+  await clock.advance(1_000) // the tool ends: the tick starts
+  await clock.settle()
+  expect(w.spawns.map(a => a.slice(2))).toEqual([['tick', 'dracula']])
+  await clock.advance(200_000)
+  await tick
+})
+
+test('band: a change that ends after the mod stopped waiting is logged and announced', OPTS, async ($, on) => {
+  const clock = mock.clock(on)
+  const w = FONTS_WORLD(on, { look: () => [0, UNPROVEN], slowSwitch: async function* () {
+    await clock.sleep(45_000); yield { stream: 'stdout', text: 'Skin one-light applied by the colour helper.\nPORT_STATE: closed\nRESULT: ok\n' }
+  } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const first = $.command.run(cmd('one-light'))
+  await clock.settle(); await clock.advance(41_000)
+  expect((await first).text).toMatch(/still finishing/)
+  await clock.advance(5_000); await clock.settle()
+  expect(w.toasts.some(t => /finished the earlier change \(ok\): Skin one-light applied/.test(t))).toBe(true)
+})
+
+test('band: narrow (under 64 cells), the setup button says Set up…', OPTS, async ($, on) => {
+  FONTS_WORLD(on, { look: () => [5, NONE] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  const narrowBand = { ...BAND, props: { ...BAND.props, bodyColumns: 60 } }
+  let ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...narrowBand })
+  await ui.press({ key: 'skin-sidebar-open' })
+  await new Promise(r => setTimeout(r, 20))
+  await ui.unmount()
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...narrowBand })
+  expect(await ui.find({ type: 'Text', text: 'Set up…' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Set up with one tick…' })).toBeUndefined()
+  await ui.unmount()
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await ui.find({ type: 'Text', text: 'Set up with one tick…' })).toBeDefined()
+  await ui.unmount()
+})
+
+// ---- band fixes (5 Nov 2026), part 2 ----
+test('a band setup that worked but carries a safety warning shows the warning too, not only its first line', OPTS, async ($, on) => {
+  const reopened = 'WARNING: the debugger opened again after this run had closed it, most likely from another click on Developer > Enable Main Process Debugger. Do not click that item again; the next /skin run asks when a click is needed.'
+  const w = FONTS_WORLD(on, { look: () => [5, NONE], tickCode: 0, tick: ['Ready. Before you tick:\nNOW: in Claude, click Developer > Enable Main Process Debugger once. You have 60 seconds.\n', 'READY_TO_TICK\n', `debugger port seen: stop clicking\nsampled colour checks: 5 of 5 passed (0 unknown)\n${reopened}\ndebugger: confirmed closed (seen open -> confirmed closed: 0.1 s)\nhelper: started\nPORT_STATE: closed\nRESULT: ok\n`] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  let ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-sidebar-open' })
+  await new Promise(r => setTimeout(r, 20))
+  await ui.unmount()
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-band-setup' })
+  await ui.unmount()
+  await new Promise(r => setTimeout(r, 20))
+  expect(w.toasts.some(t => t.includes(reopened))).toBe(true)
+})
+
+test('band: after a failed setup the status line gives the recovery step, never the old "click" instruction', OPTS, async ($, on) => {
+  const w = FONTS_WORLD(on, { look: () => [5, NONE], tickCode: 3, tick: ['Ready. Before you tick:\nNOW: in Claude, click Developer > Enable Main Process Debugger once. You have 60 seconds.\n', 'READY_TO_TICK\n', 'The run stopped.\nPORT_STATE: unknown\nRESULT: failed\n'] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  let ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-sidebar-open' })
+  await new Promise(r => setTimeout(r, 20))
+  await ui.unmount()
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-band-setup' })
+  await ui.unmount()
+  await new Promise(r => setTimeout(r, 20))
+  const last = w.statuses.filter(s => typeof s === 'string').at(-1) ?? ''
+  expect(last).toMatch(/quit and reopen Claude/i)
+  expect(last).not.toMatch(/untick|NOW:|click/i)
+})
+
+test('band: /skin band off does not cancel a fonts row a typed /skin fonts is opening; it opens in the band-off look', OPTS, async ($, on) => {
+  const clock = mock.clock(on)
+  let slowNode = true
+  // The pause is in finding Node, before the fonts read starts.
+  FONTS_WORLD(on, { look: () => [0, PROVEN], runLater: async (argv) => { if (slowNode && argv.at(-1) === '--version') { slowNode = false; await clock.sleep(5_000) } } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const typed = $.command.run(cmd('fonts'))
+  await clock.settle()
+  await $.command.run(cmd('band off'))
+  await clock.advance(6_000)
+  await typed
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await ui.find({ key: 'skin-fonts-section' })).toBeDefined()
+  expect(await ui.find({ key: 'skin-fonts-close' })).toBeDefined()
+  expect(await ui.find({ key: 'skin-skins-open' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('band: a read that ran out of time never installs its answer over a newer one', OPTS, async ($, on) => {
+  const clock = mock.clock(on)
+  let n = 0
+  FONTS_WORLD(on, { look: async () => {
+    n++
+    if (n === 1) { await clock.sleep(30_000); return [0, PROVEN] } // Dracula, very late
+    return [0, PROVEN.replace('"dracula"', '"one-light"').replace('"#bd93f9"', '"#123456"')]
+  } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  void $.command.run(cmd('band on'))
+  await clock.settle()
+  await clock.advance(16_000) // the first read runs out of time: claims cleared
+  void $.command.run(cmd('band on')) // a second read answers One Light at once
+  await clock.settle()
+  await clock.advance(20_000) // the first read ends at last
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect((await claims($))[0]).toBe('Skins: One Light')
+  await ui.unmount()
+})
+
+test('band: a typed change during a Fonts read waits for it, then runs; the row shows that read', { ...OPTS, plugins: [BAR] }, async ($, on) => {
+  const clock = mock.clock(on)
+  let n = 0
+  let typed: Promise<unknown> | null = null
+  FONTS_WORLD(on, { look: async (argv) => {
+    if (argv[3] !== 'show') return [0, 'RESULT: ok']
+    n++
+    if (n === 1) {
+      // While the first Fonts read is out, an appearance change runs (as a typed command would).
+      typed = $.command.run(cmd('type on'))
+      await clock.sleep(5_000)
+      return [0, 'LOOK: {"helper":"active","look":["chat.font.plex"],"type":"on","parts":[]}\nRESULT: ok']
+    }
+    return [0, 'LOOK: {"helper":"active","look":["chat.font.lato"],"type":"on","parts":[]}\nRESULT: ok']
+  } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ plugin: 'bar-host', surface: 'desktop', ...BAND })
+  const pressed = ui.press({ key: 'skin-fonts-open' })
+  await clock.settle()
+  await clock.advance(6_000)
+  await pressed
+  await typed
+  await ui.unmount()
+  expect(n).toBe(1)
+  expect(((await typed) as { text: string }).text).not.toMatch(/busy|already running/)
+  const ui2 = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui2.select({ key: 'skin-fonts-section', value: 'chat' })
+  await ui2.unmount()
+  const ui3 = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  const font = await ui3.find({ key: 'skin-fonts-font' })
+  expect((font as { props: { value: string } }).props.value).toBe('plex')
+  await ui3.unmount()
+})
+
+// ---- band fixes (5 Nov 2026), part 3 ----
+test('band: /skin band off during a /skin fonts --tick: the fonts row asked for still opens, in the band-off look', OPTS, async ($, on) => {
+  const clock = mock.clock(on)
+  const w = FONTS_WORLD(on, { look: () => [0, PROVEN], spawn: async function* () {
+    yield { stream: 'stdout', text: 'PLAN: {"skin":null,"headers":false,"look":null,"parts":[],"words":""}\nREADY_TO_TICK\n' }
+    await clock.sleep(5_000)
+    yield { stream: 'stdout', text: '[3.00s] debugger port seen: stop clicking\nhelper: active until Claude quits\nPORT_STATE: closed\nRESULT: ok\n' }
+    return { value: { code: 0, signal: null } }
+  } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const run = $.command.run(cmd('fonts --tick'))
+  await clock.settle()
+  await $.command.run(cmd('band off'))
+  await clock.advance(6_000)
+  await run
+  expect(w.spawns).toHaveLength(1)
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await ui.find({ key: 'skin-fonts-section' })).toBeDefined()
+  expect(await ui.find({ key: 'skin-skins-open' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('band: /skin band on during a Fonts opening waits for it, then reads again; the newest read shows', { ...OPTS, plugins: [BAR] }, async ($, on) => {
+  const clock = mock.clock(on)
+  let n = 0
+  FONTS_WORLD(on, { look: async () => {
+    n++
+    if (n === 1) { await clock.sleep(5_000); return [0, PROVEN] }
+    return [0, PROVEN.replace('"dracula"', '"one-light"').replace('"#bd93f9"', '"#123456"')]
+  } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const host = await $.ui.mount({ plugin: 'bar-host', surface: 'desktop', ...BAND })
+  const pressed = host.press({ key: 'skin-fonts-open' })
+  await clock.settle()
+  const bandOn = $.command.run(cmd('band on')) // waits for the Fonts opening
+  await clock.settle()
+  await clock.advance(6_000)
+  await pressed
+  expect(((await bandOn) as { text: string }).text).toMatch(/Appearance band on/)
+  await clock.settle()
+  await host.unmount()
+  expect(n).toBe(2)
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect((await claims($))[0]).toBe('Skins: One Light')
+  expect(await ui.find({ key: 'skin-fonts-section' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('layout C: an open row shows the proven accent, and drops it on screen when the proof expires or a change clears it', OPTS, async ($, on) => {
+  const clock = mock.clock(on)
+  let answer = PROVEN
+  FONTS_WORLD(on, { look: () => [0, answer] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  await clock.settle()
+  const applyColor = async () => {
+    const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+    const t = (await ui.find({ type: 'Text', text: 'Apply' } as never)) as { props: { color?: string } } | undefined
+    const o = (await ui.find({ type: 'Text', text: 'Skins' } as never)) as { props: { color?: string } } | undefined
+    await ui.unmount()
+    return [t?.props.color, o?.props.color]
+  }
+  let ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-skins-open' })
+  await clock.settle()
+  await ui.unmount()
+  expect(await applyColor()).toEqual(['#bd93f9', '#bd93f9'])
+  await clock.advance(151_000) // the row stays open past the proof's time
+  expect(await applyColor()).toEqual([undefined, undefined])
+  // Open again (a fresh read), then a typed change clears the proof: the accent goes at once.
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-band-close' })
+  await ui.press({ key: 'skin-skins-open' })
+  await clock.settle()
+  await ui.unmount()
+  expect(await applyColor()).toEqual(['#bd93f9', '#bd93f9'])
+  answer = UNPROVEN // the read after the change proves no skin
+  const typed = $.command.run(cmd('one-light'))
+  await clock.settle()
+  expect((await applyColor())[0]).toBe(undefined)
+  await clock.advance(30_000)
+  await typed
+})
+
+test('band: proven claims go back to plain words 150 s after the newest read', OPTS, async ($, on) => {
+  const clock = mock.clock(on)
+  FONTS_WORLD(on, { look: () => [0, PROVEN] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  await clock.settle()
+  await clock.advance(100_000)
+  await $.command.run(cmd('band on')) // a newer read at 100 s: its own 150 s
+  await clock.settle()
+  await clock.advance(100_000) // 200 s: the first proof's time is up, the newer one's is not
+  let ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect((await claims($))[0]).toBe('Skins: Dracula')
+  await ui.unmount()
+  await clock.advance(60_000) // 260 s: the newer one's time is up too
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await claims($)).toEqual(['Skins', 'Fonts', 'Sidebar'])
+  await ui.unmount()
+})
+
+
+// ---- the band's one-operation queue: the rules it keeps ----
+test('band: /skin band off during a Skins opening waits for it, then closes the row', OPTS, async ($, on) => {
+  const clock = mock.clock(on)
+  let slow = false
+  FONTS_WORLD(on, { look: () => [0, PROVEN], listLater: async (path) => { if (slow && path.endsWith('/presets')) { slow = false; await clock.sleep(5_000) } } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  await clock.advance(1_000)
+  slow = true
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  const pressed = ui.press({ key: 'skin-skins-open' })
+  await clock.settle()
+  const off = $.command.run(cmd('band off')) // waits for the opening to end, then closes its row
+  await clock.advance(6_000)
+  await pressed
+  await off
+  await ui.unmount()
+  const ui2 = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await ui2.find({ key: 'skin-band-skin' })).toBeUndefined()
+  await ui2.unmount()
+})
+
+test('band: a read that ends while a change is running claims nothing', OPTS, async ($, on) => {
+  const clock = mock.clock(on)
+  FONTS_WORLD(on, { look: async () => { await clock.sleep(3_000); return [0, PROVEN] }, slowSwitch: async function* () {
+    await clock.sleep(10_000); yield { stream: 'stdout', text: 'Skin one-light applied by the colour helper.\nRESULT: ok\n' }
+  } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  void $.command.run(cmd('band on'))
+  await clock.settle()
+  await clock.advance(1_000) // the read is out
+  const typed = $.command.run(cmd('one-light')) // a change starts while it is out
+  await clock.settle()
+  await clock.advance(3_000) // the read ends during the change
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect((await claims($))[0]).toBe('Skins')
+  await ui.unmount()
+  await clock.advance(20_000)
+  await typed
+})
+
+test('band: band Apply while a typed change runs starts nothing and says so', OPTS, async ($, on) => {
+  const clock = mock.clock(on)
+  const raw: (readonly string[])[] = []
+  const w = FONTS_WORLD(on, { raw, look: () => [0, PROVEN], slowSwitch: async function* () {
+    await clock.sleep(10_000); yield { stream: 'stdout', text: 'Skin one-light applied by the colour helper.\nRESULT: ok\n' }
+  } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  await clock.settle()
+  let ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-skins-open' })
+  await clock.settle()
+  await ui.unmount()
+  const typed = $.command.run(cmd('one-light'))
+  await clock.settle()
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-band-apply' })
+  await clock.settle()
+  await ui.unmount()
+  expect(raw.filter(a => a[2] === 'switch')).toHaveLength(1) // only the typed one
+  expect(w.toasts.some(x => /busy with another step/.test(x))).toBe(true)
+  await clock.advance(11_000)
+  await typed
+})
+
+test('band: a dropdown pick while an Apply runs is ignored, so the row never shows a choice that was not sent', OPTS, async ($, on) => {
+  const clock = mock.clock(on)
+  const raw: (readonly string[])[] = []
+  FONTS_WORLD(on, { raw, look: () => [0, PROVEN], slowSwitch: async function* () {
+    await clock.sleep(5_000); yield { stream: 'stdout', text: 'Skin one-light applied by the colour helper.\nRESULT: ok\n' }
+  } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  await clock.settle()
+  let ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-skins-open' })
+  await clock.settle()
+  await ui.unmount()
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.select({ key: 'skin-band-skin', value: 'one-light' })
+  await ui.unmount()
+  const host = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  // The test kit lets go of a press whose drawing changed before it ended; the Apply itself has started (checked below).
+  const pressed = host.press({ key: 'skin-band-apply' }).catch(() => {})
+  await clock.settle()
+  const ui2 = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui2.select({ key: 'skin-band-skin', value: 'dracula' }) // during the Apply
+  await ui2.unmount()
+  const ui3 = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(((await ui3.find({ key: 'skin-band-skin' })) as { props: { value: string } }).props.value).toBe('one-light')
+  await ui3.unmount()
+  await clock.advance(6_000)
+  await pressed
+  await host.unmount().catch(() => {})
+  expect(raw.filter(a => a[2] === 'switch').map(a => a[3])).toEqual(['one-light'])
+})
+
+test('band: a typed command right after /skin band on waits through the hand-over to its read, then runs', OPTS, async ($, on) => {
+  const clock = mock.clock(on)
+  FONTS_WORLD(on, { look: async () => { await clock.sleep(5_000); return [0, PROVEN] } })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const bandOn = $.command.run(cmd('band on')) // its own step, then its read: two operations, one after the other
+  const typed = $.command.run(cmd('status')) // arrives during the first, must wait through both
+  void bandOn
+  await clock.settle()
+  await clock.advance(6_000)
+  expect(((await typed) as { text: string }).text).not.toMatch(/busy/)
+})
+
+// ---- Light look-alikes (the owner's picks, 5 Nov 2026): option C's "Now on" line, verc retired ----
+const HALF = (mode: string, page: string, side: string, acc: string) => `@media (prefers-color-scheme: ${mode}) {
+  *, *::before, *::after {
+    --cds-surface-0:${side} !important; --cds-surface-1:${page} !important; --cds-surface-2:#ffffff !important;
+    --cds-role-accent-450:${acc} !important; --cds-role-accent-fill:${acc} !important; --cds-role-accent-fill-hover:#123456 !important;
+  }
+  .status-dot, [data-cds=Pulse] { --cds-fill-accent:#0362c1 !important; }
+}
+`
+const KANAGAWA_CSS = HALF('dark', '#1f1f28', '#16161d', '#7e9cd8') + HALF('light', '#f2ecbc', '#d5cea3', '#4d699b')
+
+test('chipsOf reads page, sidebar and accent of each half, exactly once each, or gives null', () => {
+  expect(chipsOf(KANAGAWA_CSS)).toEqual({ light: ['#f2ecbc', '#d5cea3', '#4d699b'], dark: ['#1f1f28', '#16161d', '#7e9cd8'] })
+  expect(chipsOf(HALF('dark', '#000000', '#111111', '#222222'))).toBeNull() // one half only
+  expect(chipsOf(KANAGAWA_CSS.replace('--cds-surface-1:#f2ecbc', '--cds-surface-1:red'))).toBeNull() // not a plain #rrggbb
+  expect(chipsOf(KANAGAWA_CSS.replace('--cds-surface-2:#ffffff', '--cds-surface-2:#ffffff; --cds-surface-0:#000000'))).toBeNull() // set twice
+  expect(chipsOf('')).toBeNull()
+})
+
+test('verc was retired: /skin verc says so and names github or ayu; nothing reaches the tool', OPTS, async ($, on) => {
+  const w = world(on)
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  for (const line of ['verc', 'verc --tick', 'verc font plex']) {
+    const t = (await $.command.run(cmd(line))).text
+    if (line === 'verc font plex') continue // the one-line command goes to the tool, which refuses retired names itself
+    expect(t).toBe(retiredText('verc'))
+  }
+  expect(retiredText('verc')).toContain('/skin github or /skin ayu')
+  expect(retiredText('dracula')).toBeNull()
+  expect(tool(w.runs).filter(a => a.includes('verc') && a[2] !== 'set')).toHaveLength(0)
+  // Only the one-line command reached the tool (as a set run, never a tick).
+  expect(w.spawns.map(a => bare(a).slice(2))).toEqual([['set', 'verc', 'font', 'plex']])
+})
+
+// The rendered "Now on" box (Text keys are not kept by the renderer, so chips are found by their paint).
+type Node = { type?: string; props?: Record<string, unknown>; children?: unknown[]; text?: string }
+const nowBox = async (ui: { find: (q: { key: string }) => Promise<unknown> }) => (await ui.find({ key: 'skin-band-now' })) as Node | undefined
+const chipsShown = async (ui: { find: (q: { key: string }) => Promise<unknown> }) => {
+  const out: unknown[] = []
+  const walk = (n: unknown) => { if (n === null || typeof n !== 'object') return; const x = n as Node; if (x.type === 'Text' && x.props?.backgroundColor !== undefined) out.push(x.props.backgroundColor); (x.children ?? []).forEach(walk) }
+  walk(await nowBox(ui))
+  return out
+}
+const nameShown = async (ui: { find: (q: { key: string }) => Promise<unknown> }) => (await nowBox(ui))?.text?.replace(/\s+$/, '')
+const ONE_LIGHT = PROVEN.replace('"skin":"dracula"', '"skin":"one-light"').replace('"mode":"dark"', '"mode":"light"')
+async function applyOneLight($: any, on: On, css: (p: string) => string | undefined, after = ONE_LIGHT, sw?: [number, string]) {
+  let answer = PROVEN
+  const w = FONTS_WORLD(on, { look: () => [0, answer], css, ...(sw ? { switch: sw } : {}) })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  await new Promise(r => setTimeout(r, 20))
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-skins-open' })
+  await new Promise(r => setTimeout(r, 20))
+  await ui.select({ key: 'skin-band-skin', value: 'one-light' })
+  answer = after
+  await ui.press({ key: 'skin-band-apply' })
+  await new Promise(r => setTimeout(r, 30))
+  await ui.unmount()
+  return { w, ui: await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND }), setAnswer: (a: string) => { answer = a } }
+}
+const KANA_FOR_ONE_LIGHT = (p: string) => (p.endsWith('/presets/one-light.css') ? KANAGAWA_CSS : undefined)
+
+test('option C: a proven Apply shows "Now on", the skin name and the six chips painted in the preset\'s own colours', OPTS, async ($, on) => {
+  const { ui } = await applyOneLight($, on, KANA_FOR_ONE_LIGHT)
+  expect(lastBand?.now).toEqual({ skin: 'one-light', light: ['#f2ecbc', '#d5cea3', '#4d699b'], dark: ['#1f1f28', '#16161d', '#7e9cd8'] })
+  expect(lastBand?.status).toBe('')
+  expect(await ui.find({ key: 'skin-band-now' })).toBeDefined()
+  expect(await nameShown(ui)).toBe('✓ Now on:One Light')
+  expect(await chipsShown(ui)).toEqual(['#f2ecbc', '#d5cea3', '#4d699b', '#1f1f28', '#16161d', '#7e9cd8'])
+  // A new pick clears it.
+  await ui.select({ key: 'skin-band-skin', value: 'dracula' })
+  await new Promise(r => setTimeout(r, 20))
+  expect(lastBand?.now).toBeNull()
+  await ui.unmount()
+})
+
+test('option C: an Apply the next read does not prove, a failed Apply, or unreadable colours keep the tool\'s own line', OPTS, async ($, on) => {
+  const a = await applyOneLight($, on, KANA_FOR_ONE_LIGHT, PROVEN) // the read still shows dracula
+  expect(lastBand?.now).toBeNull()
+  expect(lastBand?.status).toBe('Skin x applied by the colour helper.')
+  expect(await a.ui.find({ key: 'skin-band-now' })).toBeUndefined()
+  await a.ui.unmount()
+})
+test('option C: unreadable preset colours keep the tool\'s own line (no empty confirmation)', OPTS, async ($, on) => {
+  const a = await applyOneLight($, on, (p) => (p.endsWith('/presets/one-light.css') ? 'not css' : undefined))
+  expect(lastBand?.now).toBeNull()
+  expect(lastBand?.status).toBe('Skin x applied by the colour helper.')
+  await a.ui.unmount()
+})
+test('option C: a refused Apply never says "Now on"', OPTS, async ($, on) => {
+  const a = await applyOneLight($, on, KANA_FOR_ONE_LIGHT, ONE_LIGHT, [5, 'The helper could not apply it: busy\nPORT_STATE: closed\nRESULT: refused'])
+  expect(lastBand?.now).toBeNull()
+  await a.ui.unmount()
+})
+test('option C: a typed change afterwards drops the confirmation at once (claims cleared), even if a later read names it again', OPTS, async ($, on) => {
+  const a = await applyOneLight($, on, KANA_FOR_ONE_LIGHT)
+  expect(lastBand?.now?.skin).toBe('one-light')
+  a.setAnswer(ONE_LIGHT)
+  await $.command.run(cmd('dracula'))
+  await new Promise(r => setTimeout(r, 30))
+  expect(lastBand?.now).toBeNull()
+  expect(await a.ui.find({ key: 'skin-band-now' })).toBeUndefined()
+  await a.ui.unmount()
+})
+test('a leftover verc.css is never listed, offered in the band, or applied: /skin verc still says it was retired', OPTS, async ($, on) => {
+  const w = world(on, { presetFiles: ['dracula.css', 'verc.css'] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  expect((await $.command.run(cmd('verc'))).text).toBe(retiredText('verc'))
+  expect((await $.command.run(cmd('verc --tick'))).text).toBe(retiredText('verc'))
+  expect((await $.command.run(cmd('list'))).text).not.toContain('verc')
+  expect(tool(w.runs).filter(a => a.includes('verc'))).toHaveLength(0)
+  expect(w.spawns).toHaveLength(0)
+})
+
+test('the log entry of a band Skins Apply names the skin it sent, not "none" (5 Nov live look)', OPTS, async ($, on) => {
+  const logs: string[] = []
+  let answer = PROVEN
+  FONTS_WORLD(on, { logs, look: () => [0, answer] })
+  on('env.get', ($, e) => ({ value: (e as { name?: string }).name === 'HOME' ? '/Users/someone' : undefined }))
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  await new Promise(r => setTimeout(r, 20))
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-skins-open' })
+  await new Promise(r => setTimeout(r, 20))
+  await ui.select({ key: 'skin-band-skin', value: 'one-light' })
+  answer = ONE_LIGHT
+  await ui.press({ key: 'skin-band-apply' })
+  await new Promise(r => setTimeout(r, 40))
+  await ui.unmount()
+  const entry = logs.find(l => l.includes('command: /skin band (skins: apply)'))
+  expect(entry).toBeDefined()
+  expect(entry).toMatch(/^preset: one-light \(/m)
+})
+
+test('a band row that starts with a dropdown is set in one cell, so its frame lines up under the opener (5 Nov live look)', OPTS, async ($, on) => {
+  FONTS_WORLD(on, { look: () => [0, PROVEN] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  await new Promise(r => setTimeout(r, 20))
+  for (const opener of ['skin-skins-open', 'skin-sidebar-open']) {
+    let ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+    await ui.press({ key: opener })
+    await new Promise(r => setTimeout(r, 20))
+    await ui.unmount()
+    ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+    expect(((await ui.find({ key: 'skin-band-line' })) as { props: { paddingLeft?: number } }).props.paddingLeft).toBe(1)
+    await ui.press({ key: opener }) // close it again
+    await new Promise(r => setTimeout(r, 20))
+    await ui.unmount()
+  }
+})
+test('a band row with no dropdown (only a message) is not indented', OPTS, async ($, on) => {
+  FONTS_WORLD(on, { look: () => [5, NONE.replace('"none"', '"old"')] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  await new Promise(r => setTimeout(r, 20))
+  let ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-skins-open' })
+  await new Promise(r => setTimeout(r, 20))
+  await ui.unmount()
+  ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  expect(await ui.find({ key: 'skin-band-skin' })).toBeUndefined()
+  expect(((await ui.find({ key: 'skin-band-line' })) as { props: { paddingLeft?: number } }).props.paddingLeft).toBe(0)
+  await ui.unmount()
+})
+
+// ---- The Air look (6 Nov 2026) ----
+test('Sidebar Apply answers in a few words, on and off alike; nothing is cut and the log keeps the whole line', OPTS, async ($, on) => {
+  FONTS_WORLD(on, { look: () => [0, PROVEN] })
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  await $.command.run(cmd('band on'))
+  const ui = await $.ui.mount({ plugin: 'skin', surface: 'desktop', ...BAND })
+  await ui.press({ key: 'skin-sidebar-open' })
+  await new Promise(r => setTimeout(r, 20))
+  for (const [choice, word] of [['off', 'off'], ['on', 'on']] as const) {
+    await ui.select({ key: 'skin-band-sidebar', value: choice })
+    await ui.press({ key: 'skin-band-apply' })
+    await new Promise(r => setTimeout(r, 40))
+    expect(await ui.find({ type: 'Text', text: `Project headers ${word}.` } as never)).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /…$/ } as never)).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /page\(s\)|ui\.font\./ } as never)).toBeUndefined()
+  }
+  await ui.unmount()
 })

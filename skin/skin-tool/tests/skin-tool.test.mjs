@@ -389,7 +389,7 @@ test('light skins have cards at least as light as the page, and no skin sets leg
 test('the shipped skins are exactly the 16 names, each one file with a dark half then a light half', () => {
   const dir = path.join(tool, 'presets')
   // Written out here on purpose, independent of the generator's own table.
-  const SKINS = ['absolutely', 'ayu', 'catppuccin', 'classic', 'dracula', 'github', 'gruvbox', 'linea', 'night-owl', 'nord', 'one', 'rose-pine', 'solarized', 'tokyo-night', 'verc', 'vs']
+  const SKINS = ['absolutely', 'ayu', 'catppuccin', 'classic', 'dracula', 'github', 'gruvbox', 'kanagawa', 'linea', 'night-owl', 'nord', 'one', 'rose-pine', 'solarized', 'tokyo-night', 'vs']
   assert.deepEqual(readdirSync(dir).filter((n) => n.endsWith('.css')).map((n) => n.slice(0, -4)).sort(), SKINS)
   for (const n of SKINS) {
     const parts = blocks(readFileSync(path.join(dir, `${n}.css`), 'utf8'))
@@ -405,9 +405,9 @@ test('each skin is built from its own palettes: page and main text of both halve
     classic: ['#262624', '#faf9f5'], catppuccin: ['#1e1e2e', '#eff1f5'], dracula: ['#282a36', '#fffbeb'], github: ['#0d1117', '#ffffff'],
     gruvbox: ['#282828', '#fbf1c7'], nord: ['#2e3440', '#eceff4'], one: ['#282c34', '#fafafa'], 'rose-pine': ['#191724', '#faf4ed'],
     solarized: ['#002b36', '#fdf6e3'], 'tokyo-night': ['#1a1b26', '#e1e2e7'], ayu: ['#10141c', '#fcfcfc'], 'night-owl': ['#011627', '#fbfbfb'],
-    vs: ['#1e1e1e', '#ffffff'], absolutely: ['#2d2d2b', '#f9f9f7'], linea: ['#0f0f11', '#fcfcfd'], verc: ['#000000', '#ffffff'],
+    vs: ['#1e1e1e', '#ffffff'], absolutely: ['#2d2d2b', '#f9f9f7'], linea: ['#0f0f11', '#fcfcfd'], kanagawa: ['#1f1f28', '#f2ecbc'],
   }
-  const SIDEBARS = { vs: ['#252526', '#f3f3f3'], verc: ['#000000', '#ffffff'], github: ['#010409', '#f6f8fa'], dracula: ['#21222c', '#ece9df'] }
+  const SIDEBARS = { vs: ['#252526', '#f3f3f3'], kanagawa: ['#16161d', '#d5cea3'], github: ['#010409', '#f6f8fa'], dracula: ['#21222c', '#ece9df'] }
   for (const [skin, [dark, light]] of Object.entries(PAGES)) {
     const [d, l] = blocks(readFileSync(path.join(tool, 'presets', `${skin}.css`), 'utf8'))
     assert.equal(/--cds-surface-1:(#[0-9a-f]{6})/.exec(d)[1], dark, `${skin} dark page`)
@@ -422,11 +422,11 @@ test('each skin is built from its own palettes: page and main text of both halve
 test('the generator removes only its own earlier file names, never a file it did not make', () => {
   const out = mkdtempSync(path.join(tmpdir(), 'skin-clean-'))
   mkdirSync(path.join(out, 'presets'))
-  for (const n of ['catppuccin-auto', 'warm-dark', 'my-custom', 'constructor', 'dotcheck-test']) writeFileSync(path.join(out, 'presets', `${n}.css`), '')
+  for (const n of ['catppuccin-auto', 'warm-dark', 'verc', 'my-custom', 'constructor', 'dotcheck-test']) writeFileSync(path.join(out, 'presets', `${n}.css`), '')
   const r = sh('make-presets.mjs', ['--out', out])
   assert.equal(r.status, 0, r.stderr)
   const left = readdirSync(path.join(out, 'presets')).filter((n) => n.endsWith('.css')).map((n) => n.slice(0, -4))
-  for (const gone of ['catppuccin-auto', 'warm-dark']) assert.ok(!left.includes(gone), gone)
+  for (const gone of ['catppuccin-auto', 'warm-dark', 'verc']) assert.ok(!left.includes(gone), gone)
   for (const kept of ['my-custom', 'constructor', 'dotcheck-test']) assert.ok(left.includes(kept), kept)
   assert.match(r.stdout, /WARNING: presets\/my-custom\.css is not one of the 16 skins/)
   rmSync(out, { recursive: true, force: true })

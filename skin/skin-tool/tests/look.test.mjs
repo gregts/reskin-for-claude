@@ -98,7 +98,7 @@ test('look keys: today\'s font keys stay as they are, every other look is ids jo
   assert.throws(() => lookKey(['chat.size.16', 'chat.size.15']), /one part per/)
   assert.throws(() => lookKey(['chat.size.99']), /Not a look part/)
   // Every part id is one of the tables, and no font name ends in a size.
-  assert.equal(LOOK_PARTS.length, 7 + 7 + 5 + 3 + 7 + 4 + 3 + 7 + 5 + 3)
+  assert.equal(LOOK_PARTS.length, 9 + 9 + 5 + 3 + 9 + 4 + 3 + 9 + 5 + 3)
   for (const id of LOOK_PARTS) assert.ok(LOOK_ORDER.includes(slotOf(id)), id)
 })
 
@@ -117,6 +117,7 @@ test('merging one section: the others stay, Claude\'s choices remove the part, w
   assert.match(mergeSection([], 'chat', { font: 'comic' }).why, /No font called comic/)
   assert.match(mergeSection([], 'menus', { font: 'plex' }).why, /No section called menus/)
   assert.equal(lookWhy(['headers.font.zen-maru', 'headers.weight.600']), 'Zen Maru Gothic has no weight 600 (it has 300, 400, 500).')
+  assert.equal(lookWhy(['headers.font.jetbrains', 'headers.weight.600']), null)
   for (const [f, ws] of Object.entries(FONT_WEIGHTS)) assert.ok(Object.hasOwn(FONT_STACKS, f) && ws.every((w) => [300, 400, 500, 600].includes(w)), f)
   assert.deepEqual(describeLook(['ui.font.plex', 'chat.size.16', 'rows.weight.300']), ['Everything else: IBM Plex Sans', 'Chat text: the same font as everything else, 16px', 'Sidebar rows: the same font as everything else, light 300'])
   assert.equal(fontLabel('chat.font.literata~rows.font.roboto~headers.font.literata'), 'Literata and Roboto')
@@ -146,8 +147,8 @@ test('parts: each one exact rule set, the checker takes each alone, after the he
     assert.ok(skin.checkTypeCss(ALL[id], { headers: false }) >= 1, id)
     assert.ok(!/["'\\]/.test(ALL[id]), id)
   }
-  assert.match(skin.lookPartCss('chat.font.literata'), /^\.prose, \.prose :is\(h1, h2, h3, h4, h5, h6\), \.ProseMirror\[contenteditable=true\] \{\n(  --[a-z-]+: Literata, system-ui, sans-serif !important;\n){5}  font-family: Literata, system-ui, sans-serif !important;\n\}\n$/)
-  assert.equal(skin.lookPartCss('chat.weight.300'), '.prose, .ProseMirror[contenteditable=true] { font-weight: 300 !important; }\n')
+  assert.match(skin.lookPartCss('chat.font.literata'), /^\.prose, \.prose :is\(h1, h2, h3, h4, h5, h6\), \.ProseMirror\[contenteditable=true\], \[data-testid=user-message\] p \{\n(  --[a-z-]+: Literata, system-ui, sans-serif !important;\n){5}  font-family: Literata, system-ui, sans-serif !important;\n\}\n$/)
+  assert.equal(skin.lookPartCss('chat.weight.300'), '.prose, .ProseMirror[contenteditable=true], [data-testid=user-message] p { font-weight: 300 !important; }\n')
   assert.equal(skin.lookPartCss('rows.size.13'), 'aside.dframe-sidebar { --df-row-font: 13px !important; }\n')
   assert.equal(skin.lookPartCss('rows.weight.300'), '.dframe-sidebar [data-row] button, .dframe-sidebar button[data-row] { font-weight: 300 !important; }\n')
   assert.match(skin.lookPartCss('headers.weight.400'), /^\.dframe-sidebar \.df-label-inset h3 span\.whitespace-nowrap\.inline-block \{ font-weight: 400 !important; \}\n$/)
@@ -343,4 +344,38 @@ test('look set options: All parts with claude stays claude (a real reset); a par
   assert.deepEqual(lookSetWants('rows', ['font=IBM-Plex-Sans'.toLowerCase()]).want.font, 'plex')
   assert.deepEqual(mergeSection(['rows.font.roboto', 'chat.size.16'], 'all', lookSetWants('all', ['font=claude']).want).ids, ['chat.size.16'])
   for (const [sec, opts] of [['all', ['font=same']], ['all', ['size=14']], ['ui', ['font=same']], ['chat', ['colour=red']], ['chat', ['size=16', 'size=15']]]) assert.ok(lookSetWants(sec, opts).why, `${sec} ${opts}`)
+})
+
+test('your questions: every chat part names them, nothing wider is allowed, and the check reads them (7 Nov 2026)', () => {
+  // Bubble probe run 11: Claude sizes the paragraph itself in @layer utilities, outside .prose.
+  assert.equal(skin.QUESTION_SEL, '[data-testid=user-message] p')
+  const ruleFor = (css) => css.split('}').find((r) => r.includes(skin.QUESTION_SEL))
+  assert.match(ruleFor(skin.lookPartCss('chat.font.plex')), /font-family: IBM Plex Sans/)
+  assert.match(ruleFor(skin.lookPartCss('chat.size.12')), /font-size: 12px !important; line-height: 18px !important/)
+  assert.match(ruleFor(skin.lookPartCss('chat.weight.500')), /font-weight: 500 !important/)
+  // The other sections never touch them.
+  for (const id of LOOK_PARTS) if (!id.startsWith('chat.')) assert.ok(!skin.lookPartCss(id).includes(skin.QUESTION_SEL), id)
+  // Only this attribute: any other test id, or a wider selector, is refused by the sheet checker.
+  const size = 'font-size: 16px !important; line-height: 22px !important;'
+  for (const bad of [
+    `[data-testid=assistant-message] p { ${size} }\n`,
+    `[data-testid=user-message] { ${size} }\n`,
+    `[data-testid=user-message] p { color: red !important; }\n`,
+    `[data-testid=user-message] p { background: red; }\n`,
+    `[data-testid=user-message] p, .x { font-weight: 300 !important; }\n`,
+  ]) assert.throws(() => skin.checkTypeCss(bad), undefined, bad)
+  // The check: shown and right = match, shown and wrong = DO NOT match, none shown = not checked, never a pass.
+  const good = { family: 'IBM Plex Sans', size: 16, line: 22, weight: 500 }
+  const lines = (question) => fontLines({ font: 'chat.font.plex~chat.size.16~chat.weight.500', sample: { stable: true, pages: [{ look: { paragraph: good, composer: good, question } }] } }).join('\n')
+  assert.match(lines(good), /your questions font match, size match, weight match/)
+  assert.match(lines({ ...good, size: 15 }), /your questions font match, size DO NOT match, weight match/)
+  assert.match(lines({ ...good, line: 21 }), /your questions font match, size DO NOT match/)
+  assert.match(lines({ ...good, family: 'Anthropic Sans' }), /your questions font DO NOT match/)
+  assert.match(lines({ ...good, weight: 400 }), /weight DO NOT match$/m)
+  assert.match(lines(null), /your questions font not checked, size not checked, weight not checked/)
+  // The sampler reads the same element the rules name, in all three of its readers.
+  const src = readFileSync(new URL('../skin.mjs', import.meta.url), 'utf8')
+  assert.equal(src.split(`'${skin.QUESTION_SEL}'`).length - 1, 4, 'the constant and fonts, sizes and look')
+  // A scrolled-away question never stands in for the one shown: fonts and look use the clipping-aware test too.
+  assert.ok(src.includes(`fam(main, '${skin.QUESTION_SEL}', onScreen)`) && src.includes(`firstOf(all(document, '${skin.QUESTION_SEL}'), onScreen)`))
 })

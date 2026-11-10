@@ -4,18 +4,20 @@
 
 export const FONT_LABELS: Readonly<Record<string, string>> = {
   'inter-tight': 'Inter Tight', literata: 'Literata', plex: 'IBM Plex Sans', noto: 'Noto Sans', roboto: 'Roboto', lato: 'Lato', 'zen-maru': 'Zen Maru Gothic',
+  commissioner: 'Commissioner', jetbrains: 'JetBrains Mono',
 }
 // Only the weights each family really has (the tool's FONT_WEIGHTS).
 export const FONT_WEIGHTS: Readonly<Record<string, readonly number[]>> = {
   'inter-tight': [300, 400, 500, 600], literata: [300, 400, 500, 600], plex: [300, 400, 500, 600], noto: [300, 400, 500, 600],
   roboto: [300, 400, 500, 600], lato: [300, 400], 'zen-maru': [300, 400, 500],
+  commissioner: [300, 400, 500, 600], jetbrains: [300, 400, 500, 600],
 }
 export type SectionId = 'all' | 'chat' | 'rows' | 'headers' | 'ui'
 export type Section = { id: SectionId; label: string; help: string; sizes: readonly number[]; weights: readonly number[] }
 export const SECTIONS: readonly Section[] = [
   // All parts (4 Nov 2026): one font for the whole app at once; every part keeps its size and weight.
   { id: 'all', label: 'All parts', help: 'One font for the whole app. Every part keeps its own size and weight.', sizes: [], weights: [] },
-  { id: 'chat', label: 'Chat text', help: 'Replies and the message box.', sizes: [12, 13, 14, 15, 16], weights: [300, 400, 500] },
+  { id: 'chat', label: 'Chat text', help: 'Replies, your questions and the message box.', sizes: [12, 13, 14, 15, 16], weights: [300, 400, 500] },
   { id: 'rows', label: 'Sidebar rows', help: 'Session names and the other sidebar row text.', sizes: [12, 13, 14, 15], weights: [300, 400, 500] },
   { id: 'headers', label: 'Project headers', help: 'The project names in the sidebar.', sizes: [12, 13, 14, 15, 16], weights: [400, 500, 600] },
   { id: 'ui', label: 'Everything else', help: 'Menus, buttons, settings and the rest (font only).', sizes: [], weights: [] },
@@ -101,7 +103,7 @@ export function resultLineOf(stdout: string, stderr: string, exitCode: number): 
 // The chat reply to /skin fonts: everything the slim card leaves out.
 export const CARD_HELP = [
   'The fonts card is open above the message box. Pick a part, a font, a size and a weight, then Apply. Reset clears the picker\'s choices for that part (its font then follows Everything else); on All parts it clears every font and keeps sizes and weights. /skin font off clears every picker choice. Neither turns off the project headers (/skin type off does).',
-  'All parts sets one font everywhere (each part keeps its size and weight). Chat text is replies and the message box; sidebar rows are the session names and other row text.',
+  'All parts sets one font everywhere (each part keeps its size and weight). Chat text is replies, your questions and the message box; sidebar rows are the session names and other row text.',
   WEIGHT_HELP,
   '/skin check shows what is on; /skin fonts off closes the card.',
 ].join('\n')

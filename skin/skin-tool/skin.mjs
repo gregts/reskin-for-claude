@@ -18,7 +18,7 @@ import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { FONT_STACKS, FONT_SIZES, SIZE_LEADING, splitFontKey, LOOK_PARTS, LOOK_ORDER, parseLook, slotOf, HELPER_GEN, TICK, claudePidOf, parseListener, socketOwner, tcpProbe, waitForTick } from './skin-lib.mjs'
+import { isRetired, FONT_STACKS, FONT_SIZES, SIZE_LEADING, splitFontKey, LOOK_PARTS, LOOK_ORDER, parseLook, slotOf, HELPER_GEN, TICK, claudePidOf, parseListener, socketOwner, tcpProbe, waitForTick } from './skin-lib.mjs'
 
 const PORT = 9229
 const HOST = '127.0.0.1'
@@ -355,9 +355,14 @@ const HEALTH_PAGE = `(() => {
   // The first element with this class and none of the other skinned classes of its kind (two at once: the later rule wins).
   const BG = '.bg-surface-1, .bg-bg-100, .bg-surface-2, .bg-surface-3, .bg-bg-000, .bg-bg-200, .bg-bg-300'
   const TX = '.text-primary, .text-text-100, .text-secondary, .text-text-300, .text-text-400, .text-text-500'
-  // One querySelector with the other classes excluded in the selector itself: the browser stops at the first match, so a
-  // page with thousands of candidates costs no more than one lookup.
-  const only = (sel, all, mine) => { const not = all.split(', ').filter((c) => !mine.includes(c)).map((c) => ':not(' + c + ')').join(''); return q(sel.split(', ').map((s) => s + not).join(', ')) }
+  // One querySelector call per place; the exclusions sit in the selector, so no JavaScript candidate list is built.
+  // Panel probe 12 (9 Nov 2026): Claude forces some of its own boxes clear on purpose (small 16px icon tiles carry
+  // bg-surface-3 with an important !bg-transparent in its utilities layer, which beats any unlayered important rule).
+  // Such a box never shows a skin's colour, so a background place skips an element with exactly that unconditional
+  // utility, in either spelling (!bg-transparent, or Tailwind 4's bg-transparent!). Nothing else is skipped: variants
+  // (hover:, dark:) and other important background utilities stay eligible, so a wrong colour there still fails.
+  const FORCED = ':not([class~="!bg-transparent"]):not([class~="bg-transparent!"])'
+  const only = (sel, all, mine) => { const not = all.split(', ').filter((c) => !mine.includes(c)).map((c) => ':not(' + c + ')').join('') + (all === BG ? FORCED : ''); return q(sel.split(', ').map((s) => s + not).join(', ')) }
   // A dot not drawn as it is styled is unreadable, so the next dot is tried: the browser's own visibility test fails
   // (display none, content-visibility skipping, visibility, opacity 0); less than 2x2 px of its box is left inside the
   // window and every clipping box above it; it or anything above it is faded, filtered, masked, clipped, blended, squashed
@@ -420,6 +425,23 @@ const HEALTH_PAGE = `(() => {
     for (const el of all) { const v = paintOne(el); if (v !== null) return { on: true, v } }
     return all.length ? { on: false, v: null, present: true } : { on: false, v: null }
   }
+  // Really on screen: visible to the browser, and at least 4x4 px of it inside the window and inside every scrolling or
+  // clipping box above it (a scrolled-away element never stands in for the one shown).
+  const onScreen = (el) => {
+    try {
+      if (el.getClientRects().length === 0 || (typeof el.checkVisibility === 'function' && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true }))) return false
+      const r = el.getBoundingClientRect()
+      let l = Math.max(r.left, 0), t = Math.max(r.top, 0), rr = Math.min(r.right, innerWidth), b = Math.min(r.bottom, innerHeight)
+      let n = 0
+      for (let a = el.parentElement; a && n < 60; a = a.parentElement, n++) {
+        const c = getComputedStyle(a)
+        if (c.overflowX === 'visible' && c.overflowY === 'visible') continue
+        const ar = a.getBoundingClientRect()
+        l = Math.max(l, ar.left); t = Math.max(t, ar.top); rr = Math.min(rr, ar.right); b = Math.min(b, ar.bottom)
+      }
+      return n < 60 && rr - l >= 4 && b - t >= 4
+    } catch { return false }
+  }
   const side = q('.dframe-sidebar')
   const pulse = side ? side.querySelector('[data-cds=Pulse]') : null
   return {
@@ -432,9 +454,9 @@ const HEALTH_PAGE = `(() => {
     // Fonts (font names only, never page text): the computed family of the first visible element of each kind, or null.
     fonts: (() => {
       const shown = (el) => { try { return el.getClientRects().length > 0 && (typeof el.checkVisibility !== 'function' || el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) } catch { return false } }
-      const fam = (root, sel) => { try { for (const el of [...(root ? root.querySelectorAll(sel) : [])].slice(0, 50)) if (shown(el)) return String(getComputedStyle(el).fontFamily).slice(0, 200); return null } catch { return null } }
+      const fam = (root, sel, see = shown) => { try { for (const el of [...(root ? root.querySelectorAll(sel) : [])].slice(0, 50)) if (see(el)) return String(getComputedStyle(el).fontFamily).slice(0, 200); return null } catch { return null } }
       const main = q('.dframe-content') ?? document.body
-      return { paragraph: fam(main, 'p'), list: fam(main, 'li'), bold: fam(main, 'strong'), composer: fam(document, '.ProseMirror, [contenteditable=true]'), sidebarRow: fam(side, '[data-row]') }
+      return { paragraph: fam(main, 'p'), list: fam(main, 'li'), bold: fam(main, 'strong'), composer: fam(document, '.ProseMirror, [contenteditable=true]'), question: fam(main, '[data-testid=user-message] p', onScreen), sidebarRow: fam(side, '[data-row]') }
     })(),
     // Sizes (numbers only, never page text): computed font size and line height in px of the first visible chat
     // paragraph and of the message box, or null (none on screen, or not a plain px number).
@@ -442,21 +464,7 @@ const HEALTH_PAGE = `(() => {
     // every scrolling or clipping box above it (an off-screen paragraph never stands in for the one shown). Chat text is
     // a reply paragraph (inside Claude's markdown block .prose, not inside an editor); none on screen means not checked.
     sizes: (() => {
-      const shown = (el) => {
-        try {
-          if (el.getClientRects().length === 0 || (typeof el.checkVisibility === 'function' && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true }))) return false
-          const r = el.getBoundingClientRect()
-          let l = Math.max(r.left, 0), t = Math.max(r.top, 0), rr = Math.min(r.right, innerWidth), b = Math.min(r.bottom, innerHeight)
-          let n = 0
-          for (let a = el.parentElement; a && n < 60; a = a.parentElement, n++) {
-            const c = getComputedStyle(a)
-            if (c.overflowX === 'visible' && c.overflowY === 'visible') continue
-            const ar = a.getBoundingClientRect()
-            l = Math.max(l, ar.left); t = Math.max(t, ar.top); rr = Math.min(rr, ar.right); b = Math.min(b, ar.bottom)
-          }
-          return n < 60 && rr - l >= 4 && b - t >= 4
-        } catch { return false }
-      }
+      const shown = onScreen
       const num = (v) => { const m = /^([0-9]+(?:[.][0-9]+)?)px$/.exec(String(v)); return m ? Number(m[1]) : null }
       const one = (root, sel) => {
         try {
@@ -472,7 +480,7 @@ const HEALTH_PAGE = `(() => {
       let chat = []
       try { chat = [...document.querySelectorAll('.prose p')].filter((p) => !p.closest('.ProseMirror, [contenteditable]')) } catch {}
       const first = (els) => { try { for (const el of els.slice(0, 50)) if (shown(el)) { const c = getComputedStyle(el), size = num(c.fontSize), line = num(c.lineHeight); return size === null || line === null ? null : { size, line } } return null } catch { return null } }
-      return { paragraph: first(chat), composer: one(document, '.ProseMirror, [contenteditable=true]') }
+      return { paragraph: first(chat), composer: one(document, '.ProseMirror, [contenteditable=true]'), question: one(document, '[data-testid=user-message] p') }
     })(),
     // Font picker (4 Nov 2026): per section, the first shown element of each kind (font names and numbers only, never
     // page text): family, size, line height, weight. Chat: a reply paragraph and the message box (the same selector the
@@ -500,6 +508,7 @@ const HEALTH_PAGE = `(() => {
       const hot = (el) => { try { return !!el.closest('div.isolate.rounded-lg:has([data-cds=Pulse]), div.isolate.rounded-lg:has([aria-current=page])') } catch { return true } }
       return {
         paragraph: firstOf(chat), composer: firstOf(all(document, '.ProseMirror[contenteditable=true]')),
+        question: firstOf(all(document, '[data-testid=user-message] p'), onScreen),
         row: rowText(),
         header: firstOf(all(side, H), (el) => !hot(el)), headerEmph: firstOf(all(side, H), hot),
         ui: firstOf(all(q('.dframe-content') ?? document.body, 'button'), (el) => !el.closest('.prose') && !icon(el) && ownText(el)),
@@ -2245,7 +2254,10 @@ const fontValue = (v) => v.replace(/\s*,\s*/g, ', ').replace(/\s+/g, ' ').trim()
 export const SIZE_SELECTOR = '*'
 export const SIZE_PROPS = Object.freeze(['--chat-body', '--chat-leading', '--cmp-font-size', '--cmp-leading'])
 const SIZE_IS_LEADING = new Set(['--chat-leading', '--cmp-leading', 'line-height'])
-export const PROSE_SELECTOR = '.prose'
+// Your own sent questions (bubble probe, 7 Nov 2026): Claude sizes the paragraph itself in @layer utilities, outside
+// .prose, in a normal (not important) rule, so every chat part names it directly; any important rule beats a normal one.
+export const QUESTION_SEL = '[data-testid=user-message] p'
+export const PROSE_SELECTOR = `.prose, ${QUESTION_SEL}`
 export const PROSE_PROPS = Object.freeze(['font-size', 'line-height'])
 export const sizeCss = (size) => `${SIZE_SELECTOR} { --chat-body: ${size}px !important; --chat-leading: ${SIZE_LEADING[size]}px !important; --cmp-font-size: ${size}px !important; --cmp-leading: ${SIZE_LEADING[size]}px !important; }\n${PROSE_SELECTOR} { font-size: ${size}px !important; line-height: ${SIZE_LEADING[size]}px !important; }\n`
 // A today's font key (`plex`, `plex-16`) -> its sheet: exactly the look parts it means, joined (unchanged text).
@@ -2260,8 +2272,8 @@ export function fontCss(key) {
 // never collide with the type sheet's own rules in the checker; the swapped header selectors keep the type sheet's
 // specificity and come later, so they win; aside.dframe-sidebar is more specific than the type sheet's .dframe-sidebar.
 export const LOOK_SEL = Object.freeze({
-  chatFont: '.prose, .prose :is(h1, h2, h3, h4, h5, h6), .ProseMirror[contenteditable=true]',
-  chatWeight: '.prose, .ProseMirror[contenteditable=true]',
+  chatFont: `.prose, .prose :is(h1, h2, h3, h4, h5, h6), .ProseMirror[contenteditable=true], ${QUESTION_SEL}`,
+  chatWeight: `.prose, .ProseMirror[contenteditable=true], ${QUESTION_SEL}`,
   rows: '.dframe-sidebar [data-row]',
   rowsSize: 'aside.dframe-sidebar',
   rowsWeight: '.dframe-sidebar [data-row] button, .dframe-sidebar button[data-row]',
@@ -2315,7 +2327,8 @@ const TYPE_COLOURS = new Set([TYPE_ACCENT, 'var(--cds-text-primary)'])
 // The only bracketed text a type sheet may hold: those tokens, the attribute in TYPE_HEADER_OPEN and the :has() in
 // TYPE_HEADER_CURRENT and TYPE_HEADER_ACTIVE.
 // Font picker parts add exactly three (4 Nov 2026): the reply headings, the editable message box and the session row mark.
-const TYPE_BRACKETED = [...TYPE_COLOURS, '[aria-expanded=true]', ':has([aria-current=page])', ':has([data-cds=Pulse])', ':is(h1, h2, h3, h4, h5, h6)', '[contenteditable=true]', '[data-row]']
+// Plus your own questions (7 Nov 2026).
+const TYPE_BRACKETED = [...TYPE_COLOURS, '[aria-expanded=true]', ':has([aria-current=page])', ':has([data-cds=Pulse])', ':is(h1, h2, h3, h4, h5, h6)', '[contenteditable=true]', '[data-row]', '[data-testid=user-message]']
 // The largest sheet the slot can hold: the header sheet with the longest part of every slot (measured by a test, which
 // fails if this is too small or more than 512 bytes larger than needed).
 export const TYPE_MAX = 4608
@@ -2504,7 +2517,8 @@ export function helperPresets(dir = path.join(here, 'presets')) {
   const map = {}
   const skipped = []
   // Dot census test sheets (dotcheck-*) are for batch runs only: never offered to a helper, where they would stay until Claude quits.
-  for (const f of readdirSync(dir).filter(f => /^[a-z0-9]+(?:-[a-z0-9]+)*\.css$/.test(f) && !f.startsWith('dotcheck-') && !f.startsWith('type-') && !['off.css', 'remove.css', 'check.css'].includes(f)).sort()) {
+  // A retired skin (a leftover verc.css from an older copy) is never offered either.
+  for (const f of readdirSync(dir).filter(f => /^[a-z0-9]+(?:-[a-z0-9]+)*\.css$/.test(f) && !f.startsWith('dotcheck-') && !f.startsWith('type-') && !['off.css', 'remove.css', 'check.css'].includes(f) && !isRetired(f.slice(0, -4))).sort()) {
     const name = f.slice(0, -4)
     try { const css = readFileSync(path.join(dir, f), 'utf8'); checkCss(css); map[name] = css } catch { skipped.push(name) }
   }
@@ -2887,8 +2901,8 @@ async function main() {
   if (after !== 'none') {
     if (failure !== null) console.log(`But the job failed: ${failure.message}${verified ? '' : ' Nothing was sent to that program.'}`)
     console.log(after instanceof Error
-      ? `WARNING: could not confirm port ${PORT} closed (${after.message}). Untick Developer > Enable Main Process Debugger to be sure.`
-      : `WARNING: port ${PORT} is STILL OPEN. Untick Developer > Enable Main Process Debugger now, or quit Claude.`)
+      ? `WARNING: could not confirm port ${PORT} closed (${after.message}). Quit and reopen Claude (Cmd+Q, then open it again) to be sure; leave the Developer menu item alone.`
+      : `WARNING: port ${PORT} is STILL OPEN. Quit and reopen Claude now (Cmd+Q, then open it again); leave the Developer menu item alone.`)
     return 3
   }
   if (seenAt !== null) {
@@ -2951,9 +2965,9 @@ main()
     console.log(`Stopped: ${err.message}`)
     if (['check-css', 'slot-offers', 'verify', 'batch-check'].includes(process.argv[2])) process.exit(1) // offline modes: never touch or inspect the port
     try {
-      if (listener() !== 'none') console.log(`Port ${PORT} is open: untick Developer > Enable Main Process Debugger in Claude.`)
+      if (listener() !== 'none') console.log(`Port ${PORT} is open: quit and reopen Claude (Cmd+Q, then open it again).`)
     } catch {
-      console.log(`Could not check port ${PORT}: untick Developer > Enable Main Process Debugger in Claude to be sure.`)
+      console.log(`Could not check port ${PORT}: quit and reopen Claude (Cmd+Q, then open it again) to be sure.`)
     }
     process.exit(1)
   })

@@ -207,6 +207,8 @@ export function stepPath(s) {
   const o = `${s.output}\n${s.marks ?? ''}`
   if (s.via.startsWith('debugger')) {
     if (/debugger port seen|DOOR_MS|Port 9229 closed and confirmed|seen open/.test(o)) return `${s.via} (the debugger opened)`
+    // Refused on the command line (a retired name, say): the debugger way was only the guess for a bare name.
+    if (s.exitCode === 2 && !/READY_TO_TICK|DISCLOSED/.test(o)) return 'none (refused before anything ran)'
     if (/READY_TO_TICK/.test(o)) return `${s.via} (asked for the click; ${/Time is up/.test(o) ? 'no click came in time' : 'the debugger opening was not confirmed'})`
     if (/DISCLOSED/.test(o)) return `${s.via} (started; the debugger opening was not confirmed)`
     return `${s.via} (stopped before the debugger was asked for)`
@@ -245,7 +247,7 @@ const meaningful = (s) => s.slice(0, 50_000).split('\n').map(bare).filter((l) =>
 // The reason for a failure: the last real WARNING, else the first other telling line. Hints ("If ...") and the report's
 // own "helper: unchanged (... did not finish)" line are never the reason.
 const HINT = /^(WARNING:\s*)?(If |the backup guardian stays)|^helper: |^sampled colour checks: /
-const TELLING = /Stopped|stopped by|ended by|interrupted|Took too long|not confirmed|could not|did not|failed|STILL OPEN|Time is up|refused|unconfirmed|Not started|No preset|No colour helper|^FIX |Unexpected error|ended without/i
+const TELLING = /Stopped|stopped by|ended by|interrupted|Took too long|not confirmed|could not|did not|failed|STILL OPEN|Time is up|refused|unconfirmed|Not started|No preset|No colour helper|not installed|nothing was changed|nothing was started|^FIX |Unexpected error|ended without/i
 export function outcome(rec) {
   const texts = [rec.shown ?? '', ...rec.steps.map((s) => `${s.output}\n${s.marks ?? ''}`)]
   const all = texts.flatMap(meaningful)

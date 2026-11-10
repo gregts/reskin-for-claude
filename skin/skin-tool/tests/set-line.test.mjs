@@ -298,7 +298,7 @@ test('a proven pair holding the old inter is accepted as what is on, never as a 
 
 test('the tool deadline counts from the run\'s own start, so checks before the prompt use the same allowance', () => {
   const src = readFileSync(path.join(tool, 'skin-auto.mjs'), 'utf8')
-  assert.match(src, /const RUN_START = Date\.now\(\)\nconst argv0/)
+  assert.match(src, /const RUN_START = Date\.now\(\)\n(?:.*\n){0,2}const argv0 = lockWait\.rest/)
   assert.match(src, /\}, Math\.max\(1_000, RUN_LIMIT_MS - \(Date\.now\(\) - RUN_START\)\)\)/)
 })
 

@@ -1,7 +1,7 @@
 # Third-party notices
 
 Reskin contains colour values (hex codes) read from the colour schemes below, never their code. Each licence text is
-copied exactly from the source repository, read on 18 October 2026, except Gruvbox: its repository has no licence file,
+copied exactly from the source repository, read on 18 October 2026 (kanagawa on 5 November 2026), except Gruvbox: its repository has no licence file,
 so its section quotes the README line and gives the standard MIT text it names. Which skin uses which source is listed with it;
 details per colour are in `skin/skin-tool/ATTRIBUTION.md`.
 
@@ -943,7 +943,37 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## Absolutely, Linea, Verc
+## rebelot/kanagawa.nvim
 
-These three skins follow looks seen in OpenAI's Codex app. No open licence was found for them; see
+Used by: kanagawa
+Licence: MIT
+Source: https://raw.githubusercontent.com/rebelot/kanagawa.nvim/master/LICENSE
+
+```
+MIT License
+
+Copyright (c) 2021 Tommaso Laurenzi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## Absolutely, Linea
+
+These two skins follow looks seen in OpenAI's Codex app. No open licence was found for them; see
 `NOTICE.md`. They hold colour values only.

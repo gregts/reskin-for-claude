@@ -7,7 +7,7 @@
 # @raycast.mode silent
 # @raycast.packageName Reskin
 # @raycast.icon 🎨
-# @raycast.argument1 { "type": "dropdown", "placeholder": "Skin", "data": [{"title":"Remove skin","value":"off"},{"title":"Classic","value":"classic"},{"title":"Catppuccin","value":"catppuccin"},{"title":"Dracula","value":"dracula"},{"title":"GitHub","value":"github"},{"title":"Gruvbox","value":"gruvbox"},{"title":"Nord","value":"nord"},{"title":"One","value":"one"},{"title":"Rose Pine","value":"rose-pine"},{"title":"Solarized","value":"solarized"},{"title":"Tokyo Night","value":"tokyo-night"},{"title":"Ayu","value":"ayu"},{"title":"Night Owl","value":"night-owl"},{"title":"VS","value":"vs"},{"title":"Absolutely","value":"absolutely"},{"title":"Linea","value":"linea"},{"title":"Verc","value":"verc"}] }
+# @raycast.argument1 { "type": "dropdown", "placeholder": "Skin", "data": [{"title":"Remove skin","value":"off"},{"title":"Classic","value":"classic"},{"title":"Catppuccin","value":"catppuccin"},{"title":"Dracula","value":"dracula"},{"title":"GitHub","value":"github"},{"title":"Gruvbox","value":"gruvbox"},{"title":"Nord","value":"nord"},{"title":"One","value":"one"},{"title":"Rose Pine","value":"rose-pine"},{"title":"Solarized","value":"solarized"},{"title":"Tokyo Night","value":"tokyo-night"},{"title":"Ayu","value":"ayu"},{"title":"Night Owl","value":"night-owl"},{"title":"VS","value":"vs"},{"title":"Absolutely","value":"absolutely"},{"title":"Linea","value":"linea"},{"title":"Kanagawa","value":"kanagawa"}] }
 
 TOOL="$(cd "$(dirname "$0")/.." && pwd)"
 NODE="$(command -v node 2>/dev/null)"
