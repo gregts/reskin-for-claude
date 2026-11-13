@@ -301,6 +301,9 @@ earlier builds; they do not establish type compatibility. Type checks are listed
 
 | Claude desktop | Mac | macOS | Chrome | Node | What ran | Result |
 |---|---|---|---|---|---|---|
+| 5.11492.2 | MacBook Air 13-inch, M3 | 27.2 | not installed | 26.13.0 | the public 2.0.0 install from this repo (Nord): `check` in dark and in light with colours, project headers, every font, size and weight line and the sent-prompt line matching; the colour helper was already running, so no debugger was used | passed |
+| 5.1231.0 | MacBook Air 13-inch, M3 | 27.2 | not installed | 26.13.0 | the public 2.0.0 install from this repo (final package; Dracula): plugin switched from a development copy, `tick`, `check` in dark with colours, project headers, every font, size and weight line and the sent-prompt line matching; debugger confirmed closed, still closed 5 s later; light half not checked | passed (dark) |
+| 4.23118.1 | MacBook Pro 14-inch, M4 Pro | 27.2 | not running | 26.10.0 | the public 2.0.0 install from this repo (Dracula): `check` in dark with colours, project headers, every font, size and weight line and the sent-prompt line matching; the colour helper was already running, so no debugger was used; light half not checked | passed (dark) |
 | 4.23118.0 | MacBook Air 13-inch, M3 | 27.2 | not installed | 26.13.0 | a development copy of this release (not from this repo; before the see-through-box fix and the second look): `tick` (door open 1.8 s, then closed), `check` in dark and light, the band (Skins, Fonts, Sidebar) by eye including a narrow window, kanagawa, `/skin verc` refused | passed |
 | 4.16336.0 | MacBook Pro 14-inch, M4 Pro | 27.2 | not running | 26.10.0 | an earlier development copy of this release (not from this repo; before the two new fonts, the sent-prompt fonts, the second look and the health check's skipping of see-through boxes): the band (`tick kanagawa` from its setup button with the fonts coming back, Skins Apply with the "Now on" line, Fonts, Sidebar), kanagawa seen in dark and light, `/skin verc` refused; earlier development copies: `tick` with type on, the `/skin fonts` row (all parts set: chat text, sidebar rows, project headers, everything else), `check` in dark with every font, size and weight line matching | passed |
 | 4.4212.0 | MacBook Pro 14-inch, M4 Pro | 27.2 | installed, not running | 26.10.0 | the 1.1.0 build (from a development copy, not from this repo): `tick`, `check` in light; type: `/skin type on` and `/skin type off`, bold headers seen by eye with Dracula and with no skin (no skin in dark and light), `type: on when last set` after a restart | passed |
@@ -310,7 +313,7 @@ earlier builds; they do not establish type compatibility. Type checks are listed
 | 2.42304.0 | MacBook Pro 14-inch, M4 Pro | 27.0.1 | installed | 26.10.0 | an earlier build (from a development copy, not from this repo): `tick`, `switch`, `check`; with the build before it, all 16 skins seen in dark and light | passed |
 | 2.42304.0 | MacBook Air 13-inch, M3 | 27.0.1 | not installed | 26.7.0 | `tick` and `switch` with an earlier build and the earlier skin set | passed |
 
-Untested: any other Claude version, Intel Macs, macOS before 27, a Mac without Chrome on the final 2.0 package, menus in a
+Untested: any other Claude version, Intel Macs, macOS before 27, menus in a
 language other than English. Claude's internal page structure changes often; `/skin check` exists to notice when an update
 breaks a skin, and `skin/skin-tool/tested-versions.json` lists the Claude versions the skins were seen working on.
 
