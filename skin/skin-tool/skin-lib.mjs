@@ -1098,6 +1098,28 @@ const SET_ALONE = new Set(['list', 'status', 'check', 'about', 'log', 'remove'])
 export const RETIRED_SKINS = Object.freeze({ verc: Object.freeze({ why: 'its light half looked almost the same as github and ayu', try: Object.freeze(['github', 'ayu']) }) })
 export const isRetired = (name) => typeof name === 'string' && Object.hasOwn(RETIRED_SKINS, name)
 export const retiredLine = (name) => isRetired(name) ? `The skin ${name} was retired (${RETIRED_SKINS[name].why}). Nothing was changed. Try ${RETIRED_SKINS[name].try.join(' or ')} instead.` : null
+// Other names for a skin (14 Nov 2026, the owner's ask): a short name (its first three letters, plus owl for night-owl), the old
+// preset names from before the one-name-per-skin set (16 Oct), and common spellings of the source themes. A typed
+// alias is read as its skin before any check, so it is never a file name of its own. The light flavour uses the same
+// table. A retired name is never an alias.
+export const SKIN_ALIASES = Object.freeze({
+  abs: 'absolutely', cat: 'catppuccin', cla: 'classic', dra: 'dracula', git: 'github', gru: 'gruvbox', kan: 'kanagawa',
+  lin: 'linea', nig: 'night-owl', owl: 'night-owl', nor: 'nord', ros: 'rose-pine', sol: 'solarized', tok: 'tokyo-night',
+  'catppuccin-auto': 'catppuccin', 'catppuccin-latte': 'catppuccin', 'catppuccin-mocha': 'catppuccin',
+  'catppuccin-frappe': 'catppuccin', 'catppuccin-macchiato': 'catppuccin',
+  'classic-auto': 'classic', 'classic-dark': 'classic', 'classic-light': 'classic', 'claude-cream': 'classic',
+  'claude-warm': 'classic', 'warm-dark': 'classic',
+  'github-auto': 'github', 'github-dark': 'github', 'github-light': 'github',
+  'gruvbox-auto': 'gruvbox', 'gruvbox-dark': 'gruvbox', 'gruvbox-light': 'gruvbox',
+  'one-auto': 'one', 'one-dark': 'one', 'one-light': 'one',
+  'rose-pine-auto': 'rose-pine', 'rose-pine-dawn': 'rose-pine', 'rose-pine-moon': 'rose-pine', rosepine: 'rose-pine',
+  'solarized-dark': 'solarized', 'solarized-light': 'solarized',
+  'tokyo-night-auto': 'tokyo-night', 'tokyo-night-day': 'tokyo-night', 'tokyo-night-storm': 'tokyo-night',
+  'tokyo-night-light': 'tokyo-night', tokyonight: 'tokyo-night', nightowl: 'night-owl',
+  'kanagawa-wave': 'kanagawa', 'kanagawa-lotus': 'kanagawa', 'ayu-light': 'ayu', 'ayu-dark': 'ayu', 'ayu-mirage': 'ayu',
+  'dracula-light': 'dracula',
+})
+export const skinAlias = (name) => typeof name === 'string' && Object.hasOwn(SKIN_ALIASES, name) ? SKIN_ALIASES[name] : name
 export const SET_USAGE = 'Use: /skin <skin> font <name> type on|off (each part optional), for example /skin dracula font plex type on.'
 export function parseSetLine(words, { isPreset, fonts = true } = {}) {
   const w = words.map((x) => String(x).toLowerCase()).filter((x) => x !== '')
@@ -1107,6 +1129,7 @@ export function parseSetLine(words, { isPreset, fonts = true } = {}) {
   if (lone !== undefined) throw new Error(lone === 'remove' ? 'remove takes everything off; use it on its own (/skin remove).' : `${lone} goes on its own (/skin ${lone}).`)
   let i = 0
   if (w[0] !== 'font' && w[0] !== 'type') {
+    w[0] = skinAlias(w[0])
     if (isRetired(w[0])) throw new Error(retiredLine(w[0]))
     if (w[0] !== 'off' && !(/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(w[0]) && isPreset?.(w[0]) === true)) throw new Error(`No skin called ${w[0].slice(0, 40)}. ${SET_USAGE}`)
     out.skin = w[0]

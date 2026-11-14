@@ -8,25 +8,49 @@
 - **Bigger project headers** in the Code tab's sidebar, coloured by activity.
 - **An optional band** above the message box to switch all of it without typing.
 
-Choose colours, fonts or larger project headers, each on its own. Nothing changes until you apply it, and the band is
-optional.
+Choose colours, fonts or larger project headers, each on its own. With the full flavour nothing changes until you
+apply it, and the band is optional; the light flavour starts on Dracula until you pick another skin.
 
-[What you need](#what-you-need) · [Install](#install) · [Update](#update) · [Use](#use) ·
+[Which flavour?](#which-flavour) · [Install](#install) · [Update](#update) · [Use](#use) ·
 [Remove](#remove-it-completely) · [Security](SECURITY.md)
 
 https://github.com/user-attachments/assets/05a4a8aa-1eb6-4683-84c7-f9822a66cf17
 
-*After each Claude launch, Reskin needs one click on Developer > Enable Main Process Debugger to start its small helper
-inside Claude. The helper applies your choices; later changes need no menu click until Claude quits.*
+## Which flavour?
 
-![Claude desktop with the tokyo-night skin: dark on the left, light on the right](screenshots/hero.png)
+Reskin comes in two flavours. Both have all 16 skins, each with a light and a dark half, and both use `/skin`.
+
+- **Full:** the skins on the whole app, the Chat tab included, plus nine fonts and bigger, bolder sidebar headers.
+  It goes through Claude's Developer menu: one click each time Claude starts.
+- **Light:** the skins on the Code tab, and they stay on after Claude restarts or updates itself. It never goes
+  through the Developer menu, so it suits anyone uneasy about that. What it cannot do: the Chat tab, fonts and the
+  bigger sidebar headers.
+
+You can run both: Light keeps the colours on, Full adds the rest when you want it.
+
+| | Light | Full |
+|---|---|---|
+| 16 skins, light and dark | Yes, in the Code tab | Yes, on the whole app |
+| Chat tab | No (Claude's mod colours cannot reach it) | Yes |
+| Fonts, text sizes, bigger sidebar headers | No | Yes |
+| After Claude restarts or updates itself | Still on | Off until you click again |
+| Developer menu | Never | One click each time Claude starts |
+| Exact colours | A few dark shades adjusted to pass Claude's contrast rule; the sidebar is Claude's own paler shade | Exact |
+| How it works | Claude's official mod colours (Settings > Appearance shows **Remove colors**) | Claude's debugger, open for about a second |
+
+Same skin names in both, short names included (`/skin dra`).
+
+![Claude desktop in the Code tab with the dracula skin in light mode and bold purple project headers](screenshots/hero.png)
 
 **Unofficial, just for fun, use at your own risk.** Reskin is not made, checked or endorsed by Anthropic. "Claude" is a
-trademark of Anthropic, PBC. Reskin changes colours and, only if you turn them on, fonts and the sidebar's project
-headers, through Claude's own Developer menu, and it may stop working after a Claude update. Read [SECURITY.md](SECURITY.md) before the first run: the one step it needs opens a debugger on
-your Mac for a moment. Full notice: [NOTICE.md](NOTICE.md).
+trademark of Anthropic, PBC. The full flavour changes colours and, only if you turn them on, fonts and the sidebar's
+project headers, through Claude's own Developer menu; the light flavour uses Claude's official mod colours. Either
+may stop working after a Claude update. Read [SECURITY.md](SECURITY.md) before the full flavour's first run: the one
+step it needs opens a debugger on your Mac for a moment. Full notice: [NOTICE.md](NOTICE.md).
 
-Reskin sends nothing off this Mac and does not touch your chats. Undo colours with `/skin off`, project headers with
+Reskin sends nothing off this Mac and does not touch your chats. Light flavour: `/skin off` turns its colours off in every
+Code tab session and they stay off (**Remove colors** in Claude's Settings > Appearance clears them only until the next
+session starts). Full flavour: undo colours with `/skin off`, project headers with
 `/skin type off` and fonts with `/skin font off`; `/skin remove` takes off all three and stops the helper. Quitting
 Claude also takes off the colours, fonts and project headers and stops the helper. The band is separate: if it is on,
 it comes back in new sessions until you type `/skin band off`. To uninstall, see
@@ -64,16 +88,46 @@ not come with a skin. All of them were taken in the Code tab of the Claude deskt
 | **rose-pine**, shown with Literata<br>![rose-pine, dark and light, shown with Literata](screenshots/rose-pine.png) | **solarized**, shown with Noto Sans<br>![solarized, dark and light, shown with Noto Sans](screenshots/solarized.png) |
 | **tokyo-night**, shown with Commissioner<br>![tokyo-night, dark and light, shown with Commissioner](screenshots/tokyo-night.png) | **vs**, shown with Roboto<br>![vs, dark and light, shown with Roboto](screenshots/vs.png) |
 
+The pictures show the full flavour with a font. The light flavour gives nearly the same colours in the Code tab: a few
+dark halves differ so Claude agrees to paint them, most slightly and One's warning colour clearly, and the sidebar is
+Claude's own paler shade.
+
+Every skin also has a short name, its first three letters: `/skin dra`, `/skin nor`, `/skin kan`, `/skin tok`
+(`/skin owl` for night-owl). Old and common names work too (`tokyo-night-day`, `rose-pine-dawn`, `catppuccin-latte`).
+
+**Too bright?** Try one, solarized or nord. **Miss the cream?** Try classic, rose-pine (Dawn) or solarized light.
+
+Reskin brings Dracula, Nord, Catppuccin, Gruvbox, Tokyo Night, Rosé Pine, Solarized, Kanagawa, GitHub, One Dark and
+One Light, Ayu, Night Owl and VS Code-style themes to the Claude desktop app, each in light and dark.
+
 **The white family.** Seven light halves are near-white, because their source themes really are: github, vs, linea,
 one, night-owl, ayu and absolutely. Switching between two of them changes the window only a little. The band's Skins
 row confirms your choice with "✓ Now on: &lt;skin&gt;" and six colour squares. For a light look that is clearly different,
 try catppuccin, gruvbox, kanagawa, rose-pine, solarized or tokyo-night.
 
-The session status dots in the sidebar use the same colours in every skin, one set for dark and one for light, so a dot
-always means the same thing: blue unread, orange waiting for you, red error, grey running. Where each colour comes from:
+In the full flavour the session status dots in the sidebar use the same colours in every skin, one set for dark and one
+for light, so a dot always means the same thing (in the light flavour they follow each skin's own colours): blue unread, orange waiting for you, red error, grey running. Where each colour comes from:
 [`ATTRIBUTION.md`](skin/skin-tool/ATTRIBUTION.md).
 
-## What you need
+## Install
+
+### Light flavour
+
+Needs the Claude desktop app with Claude Code 2.1.324 or later in its Code tab (type `/status` in a Code tab session
+to see the version). Tested on macOS. Run these two lines in Terminal:
+
+```
+claude plugin marketplace add gregts/reskin-for-claude
+claude plugin install reskin-light@reskin-for-claude
+```
+
+Then open a new Code tab session (or type `/reload-plugins`). Dracula is on until you pick another skin:
+`/skin nord`, `/skin kan`, `/skin list`, `/skin off`. One switch changes every Code tab session within about 2
+seconds. Nothing else is needed: no Developer Mode, no click.
+
+### Full flavour
+
+#### What you need
 
 | Need | Why |
 |---|---|
@@ -83,8 +137,6 @@ always means the same thing: blue unread, orange waiting for you, red error, gre
 | Developer Mode on in Claude (first time only) | The menu item Reskin needs only exists in Developer Mode. In Claude choose Help > Troubleshooting > Enable Developer Mode, then Enable in the message that follows. Claude restarts, and a Developer menu appears. |
 
 No Accessibility permission, no network and no change to Claude's files.
-
-## Install
 
 Run these two lines in Terminal (they need Claude Code's `claude` command):
 
@@ -102,22 +154,29 @@ second loses its `/skin` (if Reskin is the one that loses, it shows a status lin
 
 ## Update
 
-Run these two lines in Terminal:
+Light flavour: `claude plugin marketplace update reskin-for-claude`, then
+`claude plugin update reskin-light@reskin-for-claude`, then `/reload-plugins`.
+
+Full flavour: run these two lines in Terminal:
 
 ```
 claude plugin marketplace update reskin-for-claude
 claude plugin update skin@reskin-for-claude
 ```
 
-Then quit Claude completely (Cmd+Q) and open it again, even if Reskin does not ask you to. This is needed after every
-update: the colour helper inside Claude may have changed, and Reskin refuses an older one until Claude restarts.
+Then type `/reload-plugins` in each open Code tab session, so it runs the new version. When the release notes say the
+colour helper inside Claude changed (2.1.0 did not change it), quit Claude completely (Cmd+Q) and open it again
+instead: Reskin refuses an older helper until Claude restarts, and a command that meets one says "Quit and reopen
+Claude once". Quitting and reopening is always safe.
 
-In a Code tab session, type `/skin <name>` to apply a skin again. If you use fonts or project headers without a skin,
+After a restart, type `/skin <name>` in a Code tab session to apply a skin again. If you use fonts or project headers without a skin,
 type `/skin fonts --tick` or `/skin type on --tick` instead. Wait for the card before you click **Developer > Enable
 Main Process Debugger**. The project headers and fonts you had come back in that same run; the report says if one
 could not.
 
 ## Use
+
+This section and the ones under it are about the full flavour.
 
 1. Type `/skin list` to see the skins.
 2. Type `/skin nord` (or another skin name). Wait for the card, then click **Developer > Enable Main Process
@@ -254,6 +313,10 @@ the helper (like `/skin remove`), so after it the next skin needs `/skin <name>`
 
 ## What it never does
 
+The light flavour only sets colours through Claude's official mod colours and keeps one shared setting (the skin
+name) in Claude's mod store. It opens no debugger and runs nothing outside Claude Code. The rest of this section is
+about the full flavour.
+
 - It never patches Claude's files and never changes Claude's settings, including Appearance.
 - It never clicks the Developer menu item by itself and never applies a skin at login or when Claude restarts.
 - It never sends anything off this Mac: its only connections are to Claude on 127.0.0.1.
@@ -266,7 +329,11 @@ the helper (like `/skin remove`), so after it the next skin needs `/skin <name>`
 
 ## Remove it completely
 
-To stop using Reskin but keep it installed, type `/skin band off`, then quit Claude completely (Cmd+Q). To uninstall it:
+Light flavour: `/skin off` (it stays off; **Remove colors** in Settings > Appearance lasts only until the next session
+starts), then in Terminal
+`claude plugin uninstall reskin-light@reskin-for-claude`.
+
+Full flavour: to stop using Reskin but keep it installed, type `/skin band off`, then quit Claude completely (Cmd+Q). To uninstall it:
 
 1. Quit Claude completely (Cmd+Q). That removes the colours, the fonts, the headers, the helper and any open debugger.
 2. In Terminal, run `claude plugin uninstall skin@reskin-for-claude`, then open Claude again.
@@ -275,6 +342,9 @@ To stop using Reskin but keep it installed, type `/skin band off`, then quit Cla
    name) and `~/Library/Logs/Reskin/` (the log).
 
 ## If something goes wrong
+
+- Claude sometimes restarts on its own to install an update. With the full flavour the skin is then gone until you
+  run `/skin` again; nothing is broken. The light flavour stays on.
 
 - Click **Developer > Enable Main Process Debugger** only while a Reskin card or run asks you to. After the run, never
   click it again: a click then opens the debugger with nothing watching it. Near the end of a click run, if enough
@@ -301,6 +371,7 @@ earlier builds; they do not establish type compatibility. Type checks are listed
 
 | Claude desktop | Mac | macOS | Chrome | Node | What ran | Result |
 |---|---|---|---|---|---|---|
+| 5.11492.5 | MacBook Pro 14-inch, M4 Pro | 27.2 | not running | 26.10.0 | development copies of this release (not from this repo): light flavour, all 16 skins in light and dark, colours read back from the window, every Code tab session following one switch, still on after quitting Claude; full flavour, `/skin kanagawa` colours read back in light, and `check` in light with every font, size and weight line and the project headers matching (colours off for that check) | passed |
 | 5.11492.2 | MacBook Air 13-inch, M3 | 27.2 | not installed | 26.13.0 | the public 2.0.0 install from this repo (Nord): `check` in dark and in light with colours, project headers, every font, size and weight line and the sent-prompt line matching; the colour helper was already running, so no debugger was used | passed |
 | 5.1231.0 | MacBook Air 13-inch, M3 | 27.2 | not installed | 26.13.0 | the public 2.0.0 install from this repo (final package; Dracula): plugin switched from a development copy, `tick`, `check` in dark with colours, project headers, every font, size and weight line and the sent-prompt line matching; debugger confirmed closed, still closed 5 s later; light half not checked | passed (dark) |
 | 4.23118.1 | MacBook Pro 14-inch, M4 Pro | 27.2 | not running | 26.10.0 | the public 2.0.0 install from this repo (Dracula): `check` in dark with colours, project headers, every font, size and weight line and the sent-prompt line matching; the colour helper was already running, so no debugger was used; light half not checked | passed (dark) |
@@ -336,10 +407,13 @@ breaks a skin, and `skin/skin-tool/tested-versions.json` lists the Claude versio
 | `/skin check` skips the small boxes Claude itself keeps see-through (exactly `!bg-transparent` or `bg-transparent!`), because no skin can colour them | Those boxes keep Claude's look. Other eligible boxes can still be sampled, and a sampled wrong colour fails; the check does not inspect every box | `FORCED` in `skin.mjs` | `health-check.test.mjs`: "judge: a raised panel that is read and shows the wrong colour fails ..." |
 | Running `skin.mjs` directly has no guardian and no run lock | For developers only; use `skin-auto.mjs` or `/skin` | `skin.mjs` | none |
 | Memory and CPU cost was measured by hand on one Mac (M4 Pro), one long chat and test pages; not on 8 GB Macs, many windows at once or days of use | Measured on real Claude: window memory within a few MB of no skin, and no extra CPU at rest. Each skin switch used about 0.1 to 0.15 s of CPU on a very long chat (once 0.57 s). On test pages only: streaming text cost the same with or without a skin, and a Light/Dark switch cost a little more on ordinary test pages, but about 2.5 times as much on a worst-case test page (0.2 s against 0.08 s). Scrolling and the helper's own idle cost were not measured. The helper checks its folder once a second while Claude runs, even with colours off; `/skin remove` stops it | colours set on every page element (`*` rule) in `make-presets.mjs` | none |
+| Light flavour: Claude's mod colours reach the Code tab only | The Chat tab, fonts, sizes and headers need the full flavour, which works on top | `reskin-light/hooks/register.ts` | none (official limit) |
+| Light flavour: Claude refuses a whole theme if any text is under 3:1, so nine dark halves differ from the full flavour (most slightly, One's warning colour clearly); the sidebar, selected row and status dots are Claude's own shades of the skin's colours | Near-identical colours | `reskin-light/hooks/skins.ts` (generated from the presets) | `reskin-light/tests/reskin.test.ts`: "every skin is one Desktop agrees to paint, in Light and Dark" |
+| Light flavour: in split view the second pane draws no theme | The window shows the main pane's skin | none | none (seen live) |
 | The log filter removes known secret formats only | Read an entry before you share it | `skin-log.mjs` | `run-log.test.mjs`: "redaction: every known format ..." |
 
 Test files are in `skin/skin-tool/tests/` (`node --test --test-concurrency=1 'tests/*.test.mjs'`, about 2 minutes) and
-`skin/tests/` (`claude plugin test skin`).
+`skin/tests/` (`claude plugin test skin`), and for the light flavour `reskin-light/tests/` (`claude plugin test reskin-light`).
 
 ## Credits and licence
 

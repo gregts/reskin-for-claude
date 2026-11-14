@@ -6,7 +6,7 @@ import { SECTIONS, allPicks, defaultPicks, fontOptions, lookInfoOf, noLookText, 
 import type { SectionId } from './fonts'
 import { APPEND_SH, BoundedText, Capture, ENTRY_MAX_BYTES, LOG_DIR, LOG_FILE, LOG_MAX_BYTES, Milestones, appearanceOf, formatEntry, logView, macModeOf, portOf } from './log'
 import type { LogRecord, PortState, Step } from './log'
-import { ABOUT, CARD, RING_SIZE, cardFacts, cardParagraph, planOf, startResult, startStatus, startSummary, countdownSvg, displayName, listText, modeOf, noHelper, nodeCandidates, nodeMajorOk, isSkinName, parse, skinSuggestions, oneClickOf, fontsOf, argumentHintOf, summary, toolDirCandidates, retiredText } from './logic'
+import { ABOUT, CARD, RING_SIZE, cardFacts, cardParagraph, planOf, startResult, startStatus, startSummary, countdownSvg, displayName, listText, modeOf, noHelper, nodeCandidates, nodeMajorOk, isSkinName, parse, skinSuggestions, oneClickOf, fontsOf, argumentHintOf, summary, toolDirCandidates, retiredText, skinAlias } from './logic'
 import type { Preset } from './logic'
 import { BAND0, FONTS_OPENER, LOCK_WAIT_ARG, LOCK_WAIT_MS, NO_PROOF, OWN_WORK_WAIT_MS, PROOF_TTL_MS, SIDEBAR_OPENER, SIDEBAR_OPTIONS, SKINS_OPENER, STILL_FINISHING, OPENER_LABELS, SHORT_SETUP_BELOW, actionOf, bandStatusOf, bandWord, chipsOf, proofOf, rowState, skinLabel, skinOptions, sidebarDone } from './band'
 import type { Band, BandRow, NowOn, Proof, RowId } from './band'
@@ -384,7 +384,9 @@ export const register: Register = (on, options) => {
   })
 
   // The fonts card's buttons: the work runs here, with this hook's own engine interface (the buttons' closures do nothing).
-  on('ui.press', async ($, e, next) => {
+  // `{ plugin: '*' }` (2.1.0): since Claude Code 2.1.32x a press hook with no matcher hears only this mod's own buttons,
+  // so another mod's opener never arrived. Row buttons below still act only when e.plugin is 'skin'.
+  on('ui.press', { plugin: '*' }, async ($, e, next) => {
     // An opener any band mod may draw (keyed skin-fonts-open, skin-skins-open, skin-sidebar-open, documented in the
     // README): it opens its row at once, mid-turn too, and prints nothing in the chat. The press is passed on first, then
     // the row opens: opening redraws the band, and a press passed on after that would find its drawing gone (the
@@ -433,7 +435,11 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('command.run', { command: 'skin' }, async ($, e) => {
+  on('command.run', { command: 'skin' }, async ($, e, next) => {
+    // Reskin light (2.1.0): a mod loaded after this one (the light flavour) sees every /skin first, so its Code tab
+    // colours follow /skin <name> and /skin off whichever mod loads first. Its answer is not used here; a failure in it
+    // never stops this command.
+    await Promise.resolve().then(() => next(e)).catch(() => undefined)
     // The appearance band (5 Nov 2026): /skin band on|off, remembered. Changes nothing in Claude's look.
     const bw = bandWord(e.args)
     if (bw === 'bad') return { text: 'Use /skin band on or /skin band off.' }
@@ -886,7 +892,7 @@ async function handle($: EngineInterface, parsed: ReturnType<typeof parse>, step
       if (parsed.skin === null || parsed.skin === 'off') return said('A tick goes with a skin name, for example /skin dracula font plex type on.', 'refused')
       if (retiredText(parsed.skin) !== null) return said(retiredText(parsed.skin)!, 'refused')
       const all = await presets($, env.tool).catch(() => [] as Preset[])
-      const p = all.find(x => x.name === parsed.skin)
+      const p = all.find(x => x.name === parsed.skin) ?? all.find(x => x.name === skinAlias(parsed.skin!))
       if (p === undefined) return said(retiredText(parsed.skin) ?? `No skin called ${parsed.skin}. ${listText(all, await macMode($), fontsNow)}`, 'refused')
       chosen({ name: p.name, mode: p.mode })
       const wants = [...(parsed.font !== undefined ? [`--want-font=${parsed.font}`] : []), ...(parsed.type !== undefined ? [`--want-type=${parsed.type ? 'on' : 'off'}`] : [])]
@@ -929,15 +935,16 @@ async function handle($: EngineInterface, parsed: ReturnType<typeof parse>, step
     if (retiredText(parsed.name) !== null) return said(retiredText(parsed.name)!, 'refused')
     const all = await presets($, env.tool).catch(() => [] as Preset[])
     if (all.length === 0) return said(`No skins found in ${env.tool}/presets.`, 'failed')
-    const p = all.find(x => x.name === parsed.name)
+    // A short or old name (14 Nov 2026) is looked up after the typed name, so a real preset file always wins.
+    const p = all.find(x => x.name === parsed.name) ?? all.find(x => x.name === skinAlias(parsed.name))
     if (p === undefined) return said(retiredText(parsed.name) ?? `No skin called ${parsed.name}. ${listText(all, await macMode($))}`, 'refused')
     chosen({ name: p.name, mode: p.mode })
     if (parsed.via === 'auto') {
-      const r = await quick($, env, ['switch', parsed.name], steps)
-      if (!(r.exitCode === 5 && noHelper(r.stdout))) return said(summary(parsed.name, r.exitCode, r.stdout, r.stderr), last(r))
+      const r = await quick($, env, ['switch', p.name], steps)
+      if (!(r.exitCode === 5 && noHelper(r.stdout))) return said(summary(p.name, r.exitCode, r.stdout, r.stderr), last(r))
     }
-    const r = await streamed($, env, [parsed.via === 'one-click' ? 'one-click' : 'tick', parsed.name], steps)
-    return said(summary(parsed.name, r.exitCode, r.stdout, r.stderr), last(r))
+    const r = await streamed($, env, [parsed.via === 'one-click' ? 'one-click' : 'tick', p.name], steps)
+    return said(summary(p.name, r.exitCode, r.stdout, r.stderr), last(r))
   } finally {
     isRunning = false
   }

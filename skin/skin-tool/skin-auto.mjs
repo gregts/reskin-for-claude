@@ -44,7 +44,7 @@ import {
   stateDirOf, writePrivateJson, writePrivateText, readPrivateJson, debuggerClosedLine, TICK_HINT, REOPENED_WARNING, secondLook, tcpProbe, TYPE_WHAT, typeLine,
   FONT_STACKS, FONT_LINKS, FONT_SIZES, fontFamily, fontName, fontKey, fontKeyOf, fontBase, splitFontKey, SIZE_MENU_LINE, FONT_INSTALLED_JXA, fontInstalled, FONT_MENU_LINE, fontLines, parseSetLine, runSetParts, restoreParts, slotPairOk, slotFailLine, buildPlan, planLine, runPlan, judgeOff, judgeNoSkin,
   SECTIONS, FONT_WEIGHTS, parseLook, lookKey, lookSetWants, lookOffered, lookFonts, fontLabel, fontWords, describeLook, mergeSection,
-  RETIRED_SKINS, isRetired, retiredLine,
+  RETIRED_SKINS, isRetired, retiredLine, skinAlias,
 } from './skin-lib.mjs'
 import { loggingOn, startRunLog } from './skin-log.mjs'
 
@@ -90,9 +90,13 @@ const RUN_START = Date.now()
 const lockWait = parseLockWait(process.argv.slice(2))
 const argv0 = lockWait.rest
 // The first word may name the way to run: tick ("I tick it"), one-click (the run ticks), switch, status.
-const verb = ['tick', 'one-click', 'switch', 'status', 'check', 'type', 'font', 'set', 'look'].includes(argv0[0]) ? argv0[0] : null
+const VERBS = ['tick', 'one-click', 'switch', 'status', 'check', 'type', 'font', 'set', 'look']
+const verb = VERBS.includes(argv0[0]) ? argv0[0] : null
+// Short and old skin names (14 Nov 2026) are read as the skin, only where a skin name goes: the first word after
+// tick, one-click, switch or set, or a bare first word. Other verbs' words (on, off, font names) are left alone.
+const aliasAt = verb === null ? 0 : ['tick', 'one-click', 'switch', 'set'].includes(verb) ? 1 : -1
 const tickMode = verb === 'tick'
-const args = verb ? argv0.slice(1) : argv0
+const args = ((a) => { const k = aliasAt < 0 ? -1 : a.findIndex((w) => !w.startsWith('--')); return a.map((w, i) => (i === k ? skinAlias(w) : w)) })(verb ? argv0.slice(1) : argv0)
 const PRESET_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const presetFile = (name) => path.join(here, 'presets', `${name}.css`)
 const STATE = stateDirOf(homedir())
@@ -144,7 +148,7 @@ const batchArgs = () => {
   // A dot census takes no screenshots (only colours, kinds and hashed row addresses), so it needs no such OK.
   const dots = rest.includes('--dot-census')
   if (!dryRun && !dots && !rest.includes('--screenshots-ok')) usage('Batch mode saves screenshots of the whole Claude window, including the open chat and anything secret on screen (to a private folder). Open a harmless chat first, then run it again with --screenshots-ok.')
-  const names = words[0].split(',')
+  const names = words[0].split(',').map(skinAlias)
   if (names.some((n) => !/^[a-z0-9-]+$/.test(n))) usage('Preset names use only lowercase letters, digits and dashes, separated by commas.')
   const retiredIn = names.find((n) => isRetired(n))
   if (retiredIn !== undefined) usage(retiredLine(retiredIn))

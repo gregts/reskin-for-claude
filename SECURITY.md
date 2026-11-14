@@ -1,8 +1,11 @@
 # Security
 
+The light flavour (`reskin-light`) opens no debugger and needs no click: it only sets colours through Claude's
+official mod colours and keeps the skin name in Claude's mod store. Everything below is about the full flavour.
+
 ## The risk, in plain words
 
-To reach Claude's whole window, Reskin needs one click on Claude's own menu item **Developer > Enable Main Process
+To reach Claude's whole window, the full flavour needs one click on Claude's own menu item **Developer > Enable Main Process
 Debugger**. That click opens a debugger port on your Mac, `127.0.0.1:9229`. The debugger has no password.
 
 While the port is open, any program on this Mac, under any user account, can run code inside Claude. Other machines

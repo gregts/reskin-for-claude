@@ -58,7 +58,7 @@ with the user, and retry only that part through its helper command (no tick).
 | `status` | nothing | read-only: helper, request count, last skin and saved type preference; use `check` to inspect type on the current pages |
 | `check` | a running helper | read-only health check: does the skin still show its own colours? No tick, no port |
 
-Presets: the file names in `presets/` without `.css` (for example `tokyo-night`, `dracula`; each has a dark and a light half). Use preset names only.
+Presets: the file names in `presets/` without `.css` (for example `tokyo-night`, `dracula`; each has a dark and a light half). Use preset names only. Short and old names (`dra`, `kan`, `tokyo-night-day`; `SKIN_ALIASES` in `skin-lib.mjs`) are read as their preset.
 For colour skins, `skin-auto.mjs` accepts only preset names, and each preset stylesheet may set colours only (no
 hiding, moving or relabelling anything). The one type sheet (`type/sidebar-headers.css`) has its own stricter check: exact selectors,
 font size and weight within fixed limits, and colour only as the skin's own text tokens. Fonts, sizes and weights are

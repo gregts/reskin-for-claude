@@ -145,6 +145,27 @@ export const retiredText = (name: string): string | null => Object.hasOwn(RETIRE
   ? `The skin ${name} was retired (${RETIRED_SKINS[name]!.why}). Nothing was changed. Try ${RETIRED_SKINS[name]!.try.map(t => `/skin ${t}`).join(' or ')} instead.`
   : null
 
+// Short and old skin names (14 Nov 2026): the same table as the tool's SKIN_ALIASES in skin-lib.mjs (a tool test checks
+// they match). A real preset file always wins: register.tsx looks the typed name up first, then its alias.
+export const SKIN_ALIASES: Readonly<Record<string, string>> = Object.freeze({
+  abs: 'absolutely', cat: 'catppuccin', cla: 'classic', dra: 'dracula', git: 'github', gru: 'gruvbox', kan: 'kanagawa',
+  lin: 'linea', nig: 'night-owl', owl: 'night-owl', nor: 'nord', ros: 'rose-pine', sol: 'solarized', tok: 'tokyo-night',
+  'catppuccin-auto': 'catppuccin', 'catppuccin-latte': 'catppuccin', 'catppuccin-mocha': 'catppuccin',
+  'catppuccin-frappe': 'catppuccin', 'catppuccin-macchiato': 'catppuccin',
+  'classic-auto': 'classic', 'classic-dark': 'classic', 'classic-light': 'classic', 'claude-cream': 'classic',
+  'claude-warm': 'classic', 'warm-dark': 'classic',
+  'github-auto': 'github', 'github-dark': 'github', 'github-light': 'github',
+  'gruvbox-auto': 'gruvbox', 'gruvbox-dark': 'gruvbox', 'gruvbox-light': 'gruvbox',
+  'one-auto': 'one', 'one-dark': 'one', 'one-light': 'one',
+  'rose-pine-auto': 'rose-pine', 'rose-pine-dawn': 'rose-pine', 'rose-pine-moon': 'rose-pine', rosepine: 'rose-pine',
+  'solarized-dark': 'solarized', 'solarized-light': 'solarized',
+  'tokyo-night-auto': 'tokyo-night', 'tokyo-night-day': 'tokyo-night', 'tokyo-night-storm': 'tokyo-night',
+  'tokyo-night-light': 'tokyo-night', tokyonight: 'tokyo-night', nightowl: 'night-owl',
+  'kanagawa-wave': 'kanagawa', 'kanagawa-lotus': 'kanagawa', 'ayu-light': 'ayu', 'ayu-dark': 'ayu', 'ayu-mirage': 'ayu',
+  'dracula-light': 'dracula',
+})
+export const skinAlias = (name: string): string => Object.hasOwn(SKIN_ALIASES, name) ? SKIN_ALIASES[name]! : name
+
 // CSS comments removed in one linear pass (an unclosed "/*" ends the text).
 export function stripComments(css: string): string {
   let out = ''

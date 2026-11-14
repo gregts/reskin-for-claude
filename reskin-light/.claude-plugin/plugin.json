@@ -1,0 +1,11 @@
+{
+  "name": "reskin-light",
+  "version": "2.1.0",
+  "description": "Reskin light: 16 colour skins for the Claude desktop app's Code tab through Claude's official mod colours. No Developer menu, survives restarts, follows Light and Dark.",
+  "author": {
+    "name": "Reskin for Claude contributors"
+  },
+  "homepage": "https://github.com/gregts/reskin-for-claude",
+  "repository": "https://github.com/gregts/reskin-for-claude",
+  "license": "MIT"
+}

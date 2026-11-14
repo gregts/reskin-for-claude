@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On, Plugin, RenderElement } from 'claude-code'
 
 import { FONT_LABELS, FONT_WEIGHTS, SECTIONS, shortStatus, allPicks, defaultPicks, lookInfoOf, lookSummary, noLookText, picksOf, resultLineOf, setArgs, sizeOptions, weightOptions, withFont, fontOptions } from '../hooks/fonts'
-import { retiredText } from '../hooks/logic'
+import { retiredText, skinAlias } from '../hooks/logic'
 import { chipsOf } from '../hooks/band'
 import { ABOUT, CARD, DEV_MODE, TIME_UP, START_DONE, START_FACTS, cardFacts, cardParagraph, planOf, startResult, startStatus, startSummary, countdownSvg, displayName, listText, modeOf, nodeCandidates, nodeMajorOk, noHelper, parse, skinSuggestions, oneClickOf, fontsOf, FONT_NAMES, argumentHintOf, summary, toolDirCandidates } from '../hooks/logic'
 
@@ -2096,4 +2096,17 @@ test('Sidebar Apply answers in a few words, on and off alike; nothing is cut and
     expect(await ui.find({ type: 'Text', text: /page\(s\)|ui\.font\./ } as never)).toBeUndefined()
   }
   await ui.unmount()
+})
+
+// ---- Short and old skin names (14 Nov 2026, the owner's ask): looked up after the typed name ----
+describe('skin aliases', () => {
+  test('a short or old name maps to its skin; real names, command words and verc are left alone', () => {
+    expect(skinAlias('dra')).toBe('dracula')
+    expect(skinAlias('kan')).toBe('kanagawa')
+    expect(skinAlias('tokyo-night-day')).toBe('tokyo-night')
+    expect(skinAlias('one')).toBe('one')
+    expect(skinAlias('off')).toBe('off')
+    expect(skinAlias('verc')).toBe('verc')
+    expect(parse('dra')).toEqual({ kind: 'apply', name: 'dra', via: 'auto' })
+  })
 })

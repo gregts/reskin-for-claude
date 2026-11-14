@@ -1,14 +1,19 @@
 {
   "name": "reskin-for-claude",
-  "description": "Unofficial colour skins for the whole Claude desktop app (macOS).",
+  "description": "Unofficial colour skins for the Claude desktop app: a light flavour through official mod colours, and the full flavour for the whole app (macOS).",
   "owner": {
     "name": "Reskin for Claude contributors"
   },
   "plugins": [
     {
+      "name": "reskin-light",
+      "source": "./reskin-light",
+      "description": "Reskin light: /skin <name> colours the Code tab with one of 16 skins through official mod colours. No Developer menu, survives restarts."
+    },
+    {
       "name": "skin",
       "source": "./skin",
-      "description": "/skin <name> recolours the whole Claude desktop app (macOS) with one of 16 skins, each light and dark."
+      "description": "Reskin full: /skin <name> recolours the whole Claude desktop app (macOS) with one of 16 skins, each light and dark, plus fonts and bigger sidebar headers."
     }
   ]
 }
