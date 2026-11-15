@@ -8,12 +8,12 @@
     {
       "name": "reskin-light",
       "source": "./reskin-light",
-      "description": "Reskin light: /skin <name> colours the Code tab with one of 16 skins through official mod colours. No Developer menu, survives restarts."
+      "description": "Reskin light: /skin <name> colours the Code tab with one of 17 skins through official mod colours. No Developer menu, survives restarts."
     },
     {
       "name": "skin",
       "source": "./skin",
-      "description": "Reskin full: /skin <name> recolours the whole Claude desktop app (macOS) with one of 16 skins, each light and dark, plus fonts and bigger sidebar headers."
+      "description": "Reskin full: /skin <name> recolours the whole Claude desktop app (macOS) with one of 17 skins, each light and dark, plus fonts and bigger sidebar headers."
     }
   ]
 }

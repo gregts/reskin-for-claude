@@ -35,8 +35,8 @@ const STEPS = [50, 100, 250, 300, 400, 450, 600, 700, 800, 850]
 const sidebarVar = (css, name) => new RegExp(`${name}:(#[0-9a-f]{6})`).exec(css)?.[1]
 
 test('every skin block declares the accent roles and semantic tokens, as plain hex where Claude uses colours', () => {
-  assert.equal(files.length, 16)
-  assert.equal(all.length, 32) // every skin has a dark and a light half
+  assert.equal(files.length, 17)
+  assert.equal(all.length, 34) // every skin has a dark and a light half
   for (const b of all) {
     for (const s of STEPS) assert.match(b.vars[`--cds-role-accent-${s}`] ?? '', HEX, `${b.f} ${b.mode}: role ${s}`)
     for (const k of ['--cds-role-accent-fill', '--cds-role-accent-fill-hover', '--cds-role-accent-on', '--cds-fill-accent', '--cds-fill-accent-hover', '--cds-on-accent',

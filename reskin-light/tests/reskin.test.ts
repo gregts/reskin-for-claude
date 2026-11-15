@@ -17,7 +17,7 @@ const ENGINE = (on: any, sets: unknown[], clears: { n: number }, mem: Record<str
 }
 
 test('every skin is one Desktop agrees to paint, in Light and Dark', async () => {
-  expect(Object.keys(SKINS).length).toBe(16)
+  expect(Object.keys(SKINS).length).toBe(17)
   for (const name of Object.keys(SKINS)) {
     const { refused, args } = look(name)
     expect(refused).toBe(undefined)
@@ -54,7 +54,7 @@ test('typed names are forgiving', async () => {
 
 test('every skin has a unique 3-letter short name, and none is a full-flavour word', async () => {
   const shorts = Object.values(SHORT)
-  expect(new Set(shorts).size).toBe(16)
+  expect(new Set(shorts).size).toBe(17)
   for (const [name, short] of Object.entries(SHORT)) expect(skinName(short)).toBe(name)
   for (const w of FULL_WORDS) expect(w === 'off' ? skinName(w) : skinName(w)).toBe(w === 'off' ? 'off' : undefined)
 })

@@ -1,6 +1,6 @@
 # Reskin light
 
-Sixteen colour skins for the Claude desktop app's Code tab, through Claude's own mod colours. No Developer
+Seventeen colour skins for the Claude desktop app's Code tab, through Claude's own mod colours. No Developer
 menu, no debugger port and no tick: install once and the colours stay, through restarts and Claude updates,
 and follow Light and Dark by themselves.
 
@@ -25,8 +25,8 @@ Then open a new Code tab session in the Claude desktop app (or type `/reload-plu
 - `/skin off` gives Claude's own colours back. Claude's Settings > Appearance also shows "A mod set the
   colors" with a **Remove colors** button.
 
-Skins: absolutely, ayu, catppuccin, classic, dracula, github, gruvbox, kanagawa, linea, night-owl, nord, one,
-rose-pine, solarized, tokyo-night, vs. Dracula is on until you pick one.
+Skins: absolutely, ayu, catppuccin, classic, dracula, github, gruvbox, kanagawa, linea, night-owl, nord, oled,
+one, rose-pine, solarized, tokyo-night, vs. Dracula is on until you pick one.
 
 With Reskin's full flavour installed too, its `/skin` answers, and these colours follow `/skin <skin>` and `/skin off`
 typed on their own (with or without `--tick`). Longer one-line commands such as `/skin nord font plex` are left to the

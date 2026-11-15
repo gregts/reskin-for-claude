@@ -2,9 +2,9 @@
 
 **Total Reskin for the Claude desktop app on macOS: colours, fonts and the sidebar.**
 
-- **16 colour skins** for the whole app (sidebar, chat, cards, menus and buttons), each with a dark and a light half
+- **17 colour skins** for the whole app (sidebar, chat, cards, menus and buttons), each with a dark and a light half
   that follows Claude's own Appearance setting.
-- **Nine fonts** you choose per part of the app, with sizes and weights.
+- **Ten fonts** you choose per part of the app, with sizes and weights.
 - **Bigger project headers** in the Code tab's sidebar, coloured by activity.
 - **An optional band** above the message box to switch all of it without typing.
 
@@ -18,9 +18,9 @@ https://github.com/user-attachments/assets/05a4a8aa-1eb6-4683-84c7-f9822a66cf17
 
 ## Which flavour?
 
-Reskin comes in two flavours. Both have all 16 skins, each with a light and a dark half, and both use `/skin`.
+Reskin comes in two flavours. Both have all 17 skins, each with a light and a dark half, and both use `/skin`.
 
-- **Full:** the skins on the whole app, the Chat tab included, plus nine fonts and bigger, bolder sidebar headers.
+- **Full:** the skins on the whole app, the Chat tab included, plus ten fonts and bigger, bolder sidebar headers.
   It goes through Claude's Developer menu: one click each time Claude starts.
 - **Light:** the skins on the Code tab, and they stay on after Claude restarts or updates itself. It never goes
   through the Developer menu, so it suits anyone uneasy about that. What it cannot do: the Chat tab, fonts and the
@@ -30,7 +30,7 @@ You can run both: Light keeps the colours on, Full adds the rest when you want i
 
 | | Light | Full |
 |---|---|---|
-| 16 skins, light and dark | Yes, in the Code tab | Yes, on the whole app |
+| 17 skins, light and dark | Yes, in the Code tab | Yes, on the whole app |
 | Chat tab | No (Claude's mod colours cannot reach it) | Yes |
 | Fonts, text sizes, bigger sidebar headers | No | Yes |
 | After Claude restarts or updates itself | Still on | Off until you click again |
@@ -74,7 +74,7 @@ release is tried by hand on a real Mac before it ships. 2.0 is where that ended 
 ## The skins
 
 Each picture: the dark half on the left, the light half on the right. Real screenshots of the Claude desktop app
-with each skin on. Each also shows one of the nine fonts, named beside the skin: fonts are chosen separately and do
+with each skin on. Each also shows one of the ten fonts, named beside the skin: fonts are chosen separately and do
 not come with a skin. All of them were taken in the Code tab of the Claude desktop app, with the sidebar sections open.
 
 | | |
@@ -84,9 +84,10 @@ not come with a skin. All of them were taken in the Code tab of the Claude deskt
 | **dracula**, shown with Inter Tight<br>![dracula, dark and light, shown with Inter Tight](screenshots/dracula.png) | **github**, shown with Roboto<br>![github, dark and light, shown with Roboto](screenshots/github.png) |
 | **gruvbox**, shown with Lato<br>![gruvbox, dark and light, shown with Lato](screenshots/gruvbox.png) | **kanagawa**, shown with JetBrains Mono<br>![kanagawa, dark and light, shown with JetBrains Mono](screenshots/kanagawa.png) |
 | **linea**, shown with IBM Plex Sans<br>![linea, dark and light, shown with IBM Plex Sans](screenshots/linea.png) | **night-owl**, shown with JetBrains Mono<br>![night-owl, dark and light, shown with JetBrains Mono](screenshots/night-owl.png) |
-| **nord**, shown with IBM Plex Sans<br>![nord, dark and light, shown with IBM Plex Sans](screenshots/nord.png) | **one**, shown with Lato<br>![one, dark and light, shown with Lato](screenshots/one.png) |
-| **rose-pine**, shown with Literata<br>![rose-pine, dark and light, shown with Literata](screenshots/rose-pine.png) | **solarized**, shown with Noto Sans<br>![solarized, dark and light, shown with Noto Sans](screenshots/solarized.png) |
-| **tokyo-night**, shown with Commissioner<br>![tokyo-night, dark and light, shown with Commissioner](screenshots/tokyo-night.png) | **vs**, shown with Roboto<br>![vs, dark and light, shown with Roboto](screenshots/vs.png) |
+| **nord**, shown with IBM Plex Sans<br>![nord, dark and light, shown with IBM Plex Sans](screenshots/nord.png) | **oled**, shown with Geist<br>![oled, dark and light, shown with Geist](screenshots/oled.png) |
+| **one**, shown with Lato<br>![one, dark and light, shown with Lato](screenshots/one.png) | **rose-pine**, shown with Literata<br>![rose-pine, dark and light, shown with Literata](screenshots/rose-pine.png) |
+| **solarized**, shown with Noto Sans<br>![solarized, dark and light, shown with Noto Sans](screenshots/solarized.png) | **tokyo-night**, shown with Commissioner<br>![tokyo-night, dark and light, shown with Commissioner](screenshots/tokyo-night.png) |
+| **vs**, shown with Roboto<br>![vs, dark and light, shown with Roboto](screenshots/vs.png) | |
 
 The pictures show the full flavour with a font. The light flavour gives nearly the same colours in the Code tab: a few
 dark halves differ so Claude agrees to paint them, most slightly and One's warning colour clearly, and the sidebar is
@@ -96,9 +97,11 @@ Every skin also has a short name, its first three letters: `/skin dra`, `/skin n
 (`/skin owl` for night-owl). Old and common names work too (`tokyo-night-day`, `rose-pine-dawn`, `catppuccin-latte`).
 
 **Too bright?** Try one, solarized or nord. **Miss the cream?** Try classic, rose-pine (Dawn) or solarized light.
+**OLED screen?** Try oled: a true black page and sidebar with calm, warm text (its light half is classic's).
 
 Reskin brings Dracula, Nord, Catppuccin, Gruvbox, Tokyo Night, Rosé Pine, Solarized, Kanagawa, GitHub, One Dark and
-One Light, Ayu, Night Owl and VS Code-style themes to the Claude desktop app, each in light and dark.
+One Light, Ayu, Night Owl and VS Code-style themes to the Claude desktop app, each in light and dark, plus its own
+true black OLED skin.
 
 **The white family.** Seven light halves are near-white, because their source themes really are: github, vs, linea,
 one, night-owl, ayu and absolutely. Switching between two of them changes the window only a little. The band's Skins
@@ -165,7 +168,7 @@ claude plugin update skin@reskin-for-claude
 ```
 
 Then type `/reload-plugins` in each open Code tab session, so it runs the new version. When the release notes say the
-colour helper inside Claude changed (2.1.0 did not change it), quit Claude completely (Cmd+Q) and open it again
+colour helper inside Claude changed (2.2.0 changes it), quit Claude completely (Cmd+Q) and open it again
 instead: Reskin refuses an older helper until Claude restarts, and a command that meets one says "Quit and reopen
 Claude once". Quitting and reopening is always safe.
 
@@ -257,8 +260,8 @@ names stay until `/skin type off`.
 You can also type `/skin font plex 16` (IBM Plex Sans throughout the app, chat text at 16px) or `/skin font list` (the
 fonts, whether each is installed, and where to download it).
 
-- Nine free fonts (SIL Open Font License, as distributed by Google Fonts): Inter Tight, Literata, IBM Plex Sans, Noto Sans, Roboto, Lato, Zen Maru
-  Gothic, Commissioner and JetBrains Mono. Reskin ships names only, never font files: install a font first (`/skin font
+- Ten free fonts (SIL Open Font License, as distributed by Google Fonts): Inter Tight, Literata, IBM Plex Sans, Noto Sans, Roboto, Lato, Zen Maru
+  Gothic, Commissioner, JetBrains Mono and Geist. Reskin ships names only, never font files: install a font first (`/skin font
   list` has the links); Reskin checks that it is installed before it uses it.
 - Sizes: chat text 12 to 16 px, sidebar rows 12 to 15 px, project headers 12 to 16 px. Weights: chat text and sidebar
   rows 300, 400 or 500; project headers 400, 500 or 600; only weights the chosen font has. All parts and Everything
@@ -320,10 +323,10 @@ about the full flavour.
 - It never patches Claude's files and never changes Claude's settings, including Appearance.
 - It never clicks the Developer menu item by itself and never applies a skin at login or when Claude restarts.
 - It never sends anything off this Mac: its only connections are to Claude on 127.0.0.1.
-- It applies only its own 16 colour skins, one optional type sheet and optional fonts. Skins change colours only. The type sheet sets
+- It applies only its own 17 colour skins, one optional type sheet and optional fonts. Skins change colours only. The type sheet sets
   project headers to 14px at weight 400 or 500, in the main text colour or the accent colour, draws one thin accent
   stripe beside the open chat's project, and sets the shared sidebar row text size to 13px, which can affect session
-  names and other sidebar text. Fonts set the family, size and weight of chosen parts, from fixed tables of nine
+  names and other sidebar text. Fonts set the family, size and weight of chosen parts, from fixed tables of ten
   fonts, sizes and weights; no font file is loaded. Nothing is hidden or renamed.
 - It never takes screenshots in normal use.
 
@@ -371,7 +374,8 @@ earlier builds; they do not establish type compatibility. Type checks are listed
 
 | Claude desktop | Mac | macOS | Chrome | Node | What ran | Result |
 |---|---|---|---|---|---|---|
-| 5.11492.5 | MacBook Pro 14-inch, M4 Pro | 27.2 | not running | 26.10.0 | development copies of this release (not from this repo): light flavour, all 16 skins in light and dark, colours read back from the window, every Code tab session following one switch, still on after quitting Claude; full flavour, `/skin kanagawa` colours read back in light, and `check` in light with every font, size and weight line and the project headers matching (colours off for that check) | passed |
+| 5.11492.5 | MacBook Pro 14-inch, M4 Pro | 27.2 | not running | 26.10.0 | development copies of this release (not from this repo): full flavour, `/skin oled` with Geist and bold headers, `check` in dark with colours matching (light half not checked); light flavour, oled colours read back from the window in dark | passed |
+| 5.11492.5 | MacBook Pro 14-inch, M4 Pro | 27.2 | not running | 26.10.0 | development copies of 2.1.0 (not from this repo): light flavour, all 16 skins in light and dark, colours read back from the window, every Code tab session following one switch, still on after quitting Claude; full flavour, `/skin kanagawa` colours read back in light, and `check` in light with every font, size and weight line and the project headers matching (colours off for that check) | passed |
 | 5.11492.2 | MacBook Air 13-inch, M3 | 27.2 | not installed | 26.13.0 | the public 2.0.0 install from this repo (Nord): `check` in dark and in light with colours, project headers, every font, size and weight line and the sent-prompt line matching; the colour helper was already running, so no debugger was used | passed |
 | 5.1231.0 | MacBook Air 13-inch, M3 | 27.2 | not installed | 26.13.0 | the public 2.0.0 install from this repo (final package; Dracula): plugin switched from a development copy, `tick`, `check` in dark with colours, project headers, every font, size and weight line and the sent-prompt line matching; debugger confirmed closed, still closed 5 s later; light half not checked | passed (dark) |
 | 4.23118.1 | MacBook Pro 14-inch, M4 Pro | 27.2 | not running | 26.10.0 | the public 2.0.0 install from this repo (Dracula): `check` in dark with colours, project headers, every font, size and weight line and the sent-prompt line matching; the colour helper was already running, so no debugger was used; light half not checked | passed (dark) |

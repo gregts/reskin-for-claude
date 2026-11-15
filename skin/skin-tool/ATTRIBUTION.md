@@ -23,6 +23,7 @@ Anthropic, GitHub, or any of the colour scheme projects. "Claude" is a trademark
 | Night Owl, Light Owl | MIT | github.com/sdras/night-owl-vscode-theme |
 | VS (Dark+, Light+) | MIT | github.com/microsoft/vscode (extensions/theme-defaults) |
 | Kanagawa (wave, lotus) | MIT (Copyright (c) 2021 Tommaso Laurenzi) | github.com/rebelot/kanagawa.nvim (lua/kanagawa/colors.lua, lua/kanagawa/themes.lua) |
+| OLED (dark; light half is Classic light) | MIT (this project's own colours) | this repository |
 | Absolutely, Linea | no separate theme licence found in the inspected app bundle | Adapted from colour values observed in the Absolutely and Linear themes of OpenAI's Codex app (version 26.1007.71326); not affiliated with OpenAI or Linear. Colour values only; no permission is claimed. |
 | Classic dark, Classic light | Apache-2.0 covers only the brand-guidelines skill's palette (no trademark rights are granted); the colours observed in Claude's published stylesheet carry no licence of their own | github.com/anthropics/skills (brand-guidelines); Claude's stylesheet as served to the desktop app |
 
@@ -60,6 +61,7 @@ matches its own Settings > Appearance.
 - absolutely: absolutely-dark (dark) + absolutely-light (light)
 - linea: linea-dark (dark) + linea-light (light)
 - kanagawa: kanagawa-wave (dark) + kanagawa-lotus (light)
+- oled: oled (dark) + classic-light (light)
 
 ## Session status dots
 
@@ -335,6 +337,16 @@ Note: Theme roles: page ui.bg (sumiInk3), sidebar ui.bg_m3 (sumiInk0), card ui.b
 - danger text #e82424 nudged to #f17c7c to read on every surface (4.5 / 4.5 / 4.5 / 4.5:1)
 - accent background #343b4f moved to #303547 so link and main text read 4.5:1 on it
 - accent: fill #7e9cd8, button text #1f1f28, hover #90afec, chip #303547, border #4a5777 (ramp from Claude's lightness steps with this hue)
+
+### oled (dark) - Reskin original (14 Nov 2026)
+
+page #000000, sidebar #000000, card #111111, text #c4c0b6, secondary #a09c93, muted #8f8c85, link #ff8a4c, hover #202020, selected row #262626
+accent fill #ff8a4c, button text #000000, accent hover #ffaa80, accent chip #381e11
+
+Note: True black for OLED screens: page and sidebar #000000 so those pixels switch off, cards #111111. Calm warm text at about 11.6:1 on black, below the 14 to 21:1 of white on black. Accent is the Ember orange. Original colours, no source theme. Its light half is the classic light half.
+
+- pop-up shade #1c1c1b computed (card mixed 6% toward text)
+- accent: fill #ff8a4c, button text #000000, hover #ffaa80, chip #381e11, border #733e22 (ramp from Claude's lightness steps with this hue)
 
 ### catppuccin-latte (light) - catppuccin/palette latte
 

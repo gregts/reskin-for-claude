@@ -4,13 +4,13 @@
 
 export const FONT_LABELS: Readonly<Record<string, string>> = {
   'inter-tight': 'Inter Tight', literata: 'Literata', plex: 'IBM Plex Sans', noto: 'Noto Sans', roboto: 'Roboto', lato: 'Lato', 'zen-maru': 'Zen Maru Gothic',
-  commissioner: 'Commissioner', jetbrains: 'JetBrains Mono',
+  commissioner: 'Commissioner', jetbrains: 'JetBrains Mono', geist: 'Geist',
 }
 // Only the weights each family really has (the tool's FONT_WEIGHTS).
 export const FONT_WEIGHTS: Readonly<Record<string, readonly number[]>> = {
   'inter-tight': [300, 400, 500, 600], literata: [300, 400, 500, 600], plex: [300, 400, 500, 600], noto: [300, 400, 500, 600],
   roboto: [300, 400, 500, 600], lato: [300, 400], 'zen-maru': [300, 400, 500],
-  commissioner: [300, 400, 500, 600], jetbrains: [300, 400, 500, 600],
+  commissioner: [300, 400, 500, 600], jetbrains: [300, 400, 500, 600], geist: [300, 400, 500, 600],
 }
 export type SectionId = 'all' | 'chat' | 'rows' | 'headers' | 'ui'
 export type Section = { id: SectionId; label: string; help: string; sizes: readonly number[]; weights: readonly number[] }

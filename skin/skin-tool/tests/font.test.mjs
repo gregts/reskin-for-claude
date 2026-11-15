@@ -80,7 +80,7 @@ async function started(typeSheets = { headers: TYPE }) {
 
 // ---- The checker and the sheets ----
 test('every combination is offered and passes the checker: headers, each font, headers plus each font', () => {
-  assert.deepEqual(NAMES, ['inter-tight', 'literata', 'plex', 'noto', 'roboto', 'lato', 'zen-maru', 'commissioner', 'jetbrains'])
+  assert.deepEqual(NAMES, ['inter-tight', 'literata', 'plex', 'noto', 'roboto', 'lato', 'zen-maru', 'commissioner', 'jetbrains', 'geist'])
   // Each font alone (Claude's size) and with each size, each also with the headers (3 Nov 2026: sizes).
   assert.deepEqual(FONT_KEYS, NAMES.flatMap((n) => [n, ...FONT_SIZES.map((z) => `${n}-${z}`)]))
   // Font picker (4 Nov 2026): the helper gets the header sheet and every look part; today's font keys are compositions.
@@ -102,6 +102,9 @@ test('every combination is offered and passes the checker: headers, each font, h
   assert.equal(fontName('Alegreya Sans'), null)
   assert.deepEqual(FONT_WEIGHTS.commissioner, [300, 400, 500, 600])
   assert.deepEqual(FONT_WEIGHTS.jetbrains, [300, 400, 500, 600])
+  assert.deepEqual(FONT_WEIGHTS.geist, [300, 400, 500, 600])
+  assert.equal(fontFamily('geist'), 'Geist')
+  assert.equal(FONT_LINKS.geist, 'https://fonts.google.com/specimen/Geist')
   assert.deepEqual(Object.keys(FONT_WEIGHTS), NAMES)
   assert.deepEqual(Object.keys(FONT_LINKS), NAMES)
   assert.throws(() => skin.fontCss('comic'), /Not a Reskin font/)
@@ -174,7 +177,7 @@ test('session.json lists the font cap and fonts; a helper without font sheets ha
     const s = JSON.parse(readFileSync(path.join(a.d.dir, 'session.json'), 'utf8'))
     assert.deepEqual(s.caps, ['check', 'type', 'font', 'look'])
     assert.deepEqual(s.parts, LOOK_PARTS)
-    assert.equal(s.gen, 12) // 12 since 9 Nov 2026 (the health sampler changed: the helper holds it)
+    assert.equal(s.gen, 13) // 13 since 15 Nov 2026 (oled and Geist added: the helper holds the set and parts)
   } finally { a.d.done() }
   const b = await started({ headers: TYPE })
   try {

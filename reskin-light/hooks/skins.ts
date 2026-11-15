@@ -428,6 +428,44 @@ export const SKINS: Record<string, Skin> = {
       }
     }
   },
+  "oled": {
+    "label": "OLED",
+    "light": {
+      "anchors": {
+        "surface-0": "#f0eee6",
+        "surface-1": "#faf9f5",
+        "surface-2": "#ffffff",
+        "surface-3": "#ffffff",
+        "text-primary": "#141413",
+        "text-secondary": "#3d3d3a",
+        "text-muted": "#615f5b"
+      },
+      "roles": {
+        "accent": "#4a7aa9",
+        "danger": "#8e2626",
+        "success": "#006300",
+        "warning": "#734500"
+      }
+    },
+    "dark": {
+      "anchors": {
+        "surface-0": "#000000",
+        "surface-1": "#000000",
+        "surface-2": "#111111",
+        "surface-3": "#1c1c1b",
+        "text-primary": "#c4c0b6",
+        "text-secondary": "#a09c93",
+        "text-muted": "#8f8c85"
+      },
+      "roles": {
+        "accent": "#ff8a4c",
+        "danger": "#ff5d73",
+        "success": "#5fd38d",
+        "warning": "#e8bb52",
+        "pro": "#d59ad8"
+      }
+    }
+  },
   "one": {
     "label": "One",
     "light": {
@@ -684,5 +722,8 @@ export const ALIASES: Record<string, string> = {
   "ayu-light": "ayu",
   "ayu-dark": "ayu",
   "ayu-mirage": "ayu",
-  "dracula-light": "dracula"
+  "dracula-light": "dracula",
+  "ole": "oled",
+  "amoled": "oled",
+  "true-black": "oled"
 }

@@ -700,7 +700,7 @@ describe('fonts (3 Nov 2026)', () => {
     expect(at('/skin font o')).toEqual(['off', 'noto', 'roboto', 'lato', 'commissioner'])
     expect(at('/skin font n', false)).toEqual([])
     expect(at('/skin font noto')).toEqual([])
-    expect(FONT_NAMES.length).toBe(9)
+    expect(FONT_NAMES.length).toBe(10)
     expect(at('/skin font j')).toEqual(['jetbrains'])
     expect(at('/skin font a')).toEqual(['literata', 'lato', 'zen-maru', 'jetbrains'])
   })

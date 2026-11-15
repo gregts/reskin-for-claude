@@ -2,7 +2,7 @@ import type { EngineInterface, Register, ThemeSetArgs } from 'claude-code'
 import { makeColors } from './make-colors.js'
 import { SKINS, ALIASES, type Half } from './skins.js'
 
-// Reskin light: Reskin's 16 skins through Claude's official mod colours ($.theme.set).
+// Reskin light: Reskin's 17 skins through Claude's official mod colours ($.theme.set).
 // Paints the desktop app's Code tab (chat, sidebar, panels, Settings), both Light and Dark.
 // It cannot reach the Chat tab, fonts, text sizes or sidebar header sizes: that is Reskin's full flavour.
 //

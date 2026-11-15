@@ -163,6 +163,7 @@ export const SKIN_ALIASES: Readonly<Record<string, string>> = Object.freeze({
   'tokyo-night-light': 'tokyo-night', tokyonight: 'tokyo-night', nightowl: 'night-owl',
   'kanagawa-wave': 'kanagawa', 'kanagawa-lotus': 'kanagawa', 'ayu-light': 'ayu', 'ayu-dark': 'ayu', 'ayu-mirage': 'ayu',
   'dracula-light': 'dracula',
+  ole: 'oled', amoled: 'oled', 'true-black': 'oled',
 })
 export const skinAlias = (name: string): string => Object.hasOwn(SKIN_ALIASES, name) ? SKIN_ALIASES[name]! : name
 
@@ -422,7 +423,7 @@ export function fontsOf(releaseJson: string | null): boolean {
 export const argumentHintOf = (oneClick: boolean, fonts = false) => `[name | off | remove | status | check | type on|off${fonts ? ' | font <name>|off|list | fonts' : ''} | list | log | about] [--tick${oneClick ? ' | --one-click' : ''}]`
 
 // The font names the tool offers (FONT_STACKS in skin-tool/skin-lib.mjs), for the typeahead only: the tool checks every name.
-export const FONT_NAMES = ['inter-tight', 'literata', 'plex', 'noto', 'roboto', 'lato', 'zen-maru', 'commissioner', 'jetbrains'] as const
+export const FONT_NAMES = ['inter-tight', 'literata', 'plex', 'noto', 'roboto', 'lato', 'zen-maru', 'commissioner', 'jetbrains', 'geist'] as const
 
 export function skinSuggestions(text: string, start: number, cursor: number, skins: readonly string[], oneClick = true, fonts = false): Suggestion[] {
   const head = /^\s*\/skin\s+/i.exec(text)

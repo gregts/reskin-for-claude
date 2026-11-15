@@ -1,7 +1,7 @@
 {
   "name": "reskin-light",
-  "version": "2.1.0",
-  "description": "Reskin light: 16 colour skins for the Claude desktop app's Code tab through Claude's official mod colours. No Developer menu, survives restarts, follows Light and Dark.",
+  "version": "2.2.0",
+  "description": "Reskin light: 17 colour skins for the Claude desktop app's Code tab through Claude's official mod colours. No Developer menu, survives restarts, follows Light and Dark.",
   "author": {
     "name": "Reskin for Claude contributors"
   },

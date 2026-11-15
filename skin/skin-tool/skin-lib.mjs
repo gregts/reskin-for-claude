@@ -767,7 +767,8 @@ export const CLAUDE_BINARY = '/Applications/Claude.app/Contents/MacOS/Claude'
 // 11 since 8 Nov 2026: two fonts added (commissioner, jetbrains), and a helper holds its parts.
 // 12 since 9 Nov 2026: the health sampler skips boxes Claude forces clear (exactly !bg-transparent or bg-transparent!),
 // and a helper holds the sampler.
-export const HELPER_GEN = 12
+// 13 since 15 Nov 2026: oled skin and Geist font added, and a helper holds its own copy of the set and its parts.
+export const HELPER_GEN = 13
 export const OUTDATED_WHY = 'Reskin was updated after the colour helper inside Claude started. Quit and reopen Claude once (that ends the old helper and its colours), then run /skin again.'
 export function liveSession(fs, dir, proc, { uid = process.getuid(), claudeStart } = {}) {
   // A folder or session file that cannot be trusted is not proof of a running helper: a helper lives only inside the
@@ -875,8 +876,9 @@ export const FONT_STACKS = Object.freeze({
   'zen-maru': 'Zen Maru Gothic, system-ui, sans-serif',
   commissioner: 'Commissioner, system-ui, sans-serif',
   jetbrains: 'JetBrains Mono, system-ui, sans-serif',
+  geist: 'Geist, system-ui, sans-serif',
 })
-// Where each font can be downloaded for free (all nine are under the SIL Open Font License, google/fonts `ofl/`).
+// Where each font can be downloaded for free (all ten are under the SIL Open Font License, google/fonts `ofl/`).
 // Reskin ships names only, never font files.
 export const FONT_LINKS = Object.freeze({
   'inter-tight': 'https://fonts.google.com/specimen/Inter+Tight',
@@ -888,6 +890,7 @@ export const FONT_LINKS = Object.freeze({
   'zen-maru': 'https://fonts.google.com/specimen/Zen+Maru+Gothic',
   commissioner: 'https://fonts.google.com/specimen/Commissioner',
   jetbrains: 'https://fonts.google.com/specimen/JetBrains+Mono',
+  geist: 'https://fonts.google.com/specimen/Geist',
 })
 // Old names that quietly mean a current font (3 Nov 2026: Inter Tight replaced Inter, and "inter" or "Inter" typed, or a
 // remembered "inter", means Inter Tight). Exact keys only.
@@ -941,7 +944,7 @@ export const FONT_WEIGHTS = Object.freeze({
   // Only weights each installed family really has (font files, 4 Nov 2026): Lato has no 500 or 600, Zen Maru Gothic no 600.
   'inter-tight': [300, 400, 500, 600], literata: [300, 400, 500, 600], plex: [300, 400, 500, 600], noto: [300, 400, 500, 600],
   roboto: [300, 400, 500, 600], lato: [300, 400], 'zen-maru': [300, 400, 500],
-  commissioner: [300, 400, 500, 600], jetbrains: [300, 400, 500, 600],
+  commissioner: [300, 400, 500, 600], jetbrains: [300, 400, 500, 600], geist: [300, 400, 500, 600],
 })
 export const SECTIONS = Object.freeze({
   ui: Object.freeze({ label: 'Everything else', help: 'menus, buttons, settings and the rest', sizes: [], weights: [] }),
@@ -1118,6 +1121,7 @@ export const SKIN_ALIASES = Object.freeze({
   'tokyo-night-light': 'tokyo-night', tokyonight: 'tokyo-night', nightowl: 'night-owl',
   'kanagawa-wave': 'kanagawa', 'kanagawa-lotus': 'kanagawa', 'ayu-light': 'ayu', 'ayu-dark': 'ayu', 'ayu-mirage': 'ayu',
   'dracula-light': 'dracula',
+  ole: 'oled', amoled: 'oled', 'true-black': 'oled',
 })
 export const skinAlias = (name) => typeof name === 'string' && Object.hasOwn(SKIN_ALIASES, name) ? SKIN_ALIASES[name] : name
 export const SET_USAGE = 'Use: /skin <skin> font <name> type on|off (each part optional), for example /skin dracula font plex type on.'

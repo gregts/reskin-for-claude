@@ -57,7 +57,7 @@ comfortable with this, do not use it.
 - Before sending anything, checks that the process listening on the port is that same signed Claude, listening on
   127.0.0.1 only, and that Claude itself holds the other end of Reskin's connection.
 - Colour skins change colours only. A skin may set colour values and nothing else (no hiding, moving or relabelling), each stylesheet
-  is at most 16 KB, and only Reskin's own 16 skins are accepted.
+  is at most 16 KB, and only Reskin's own 17 skins are accepted.
 - The optional type sheet (project headers) has its own stricter check: exact selectors written into the code, only
   font size (11 to 16 px), font weight (400, 500, 600 or 700), the sidebar row text size, a colour that can only be
   one of the skin's own two text colour tokens, and on the open chat's project header row one fixed accent stripe
@@ -65,7 +65,7 @@ comfortable with this, do not use it.
   link or font file is accepted. The header sheet itself is about 1.3 KB; the checker refuses any type slot (header
   sheet plus font parts) over 4,608 bytes. It is off until you run `/skin type on`.
 - Fonts (optional) are small fixed rule sets, each checked text for text: exact selectors written into the code, one of
-  nine font names from a fixed table (no quotes, no font file, no link), sizes and weights from fixed tables. The helper
+  ten font names from a fixed table (no quotes, no font file, no link), sizes and weights from fixed tables. The helper
   only joins these checked parts in a fixed order; the whole slot is at most 4,608 bytes (4.5 KB). Off until you choose a font.
 - Clears the menu tick when it closes the debugger and checks that it worked; if not, it tells you not to click the
   item and to quit and reopen Claude.

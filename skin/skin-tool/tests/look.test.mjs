@@ -98,7 +98,7 @@ test('look keys: today\'s font keys stay as they are, every other look is ids jo
   assert.throws(() => lookKey(['chat.size.16', 'chat.size.15']), /one part per/)
   assert.throws(() => lookKey(['chat.size.99']), /Not a look part/)
   // Every part id is one of the tables, and no font name ends in a size.
-  assert.equal(LOOK_PARTS.length, 9 + 9 + 5 + 3 + 9 + 4 + 3 + 9 + 5 + 3)
+  assert.equal(LOOK_PARTS.length, 10 + 10 + 5 + 3 + 10 + 4 + 3 + 10 + 5 + 3)
   for (const id of LOOK_PARTS) assert.ok(LOOK_ORDER.includes(slotOf(id)), id)
 })
 

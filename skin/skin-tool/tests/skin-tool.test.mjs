@@ -284,7 +284,7 @@ test('checkCss refuses everything that could fetch, hide in a string, or sit out
 test('every shipped preset passes the stylesheet check', () => {
   const dir = path.join(tool, 'presets')
   const files = readdirSync(dir).filter((f) => f.endsWith('.css'))
-  assert.equal(files.length, 16)
+  assert.equal(files.length, 17)
   for (const f of files) assert.ok(accepted(sh('skin.mjs', ['check-css', path.join(dir, f)])), f)
 })
 
@@ -386,10 +386,10 @@ test('light skins have cards at least as light as the page, and no skin sets leg
   }
 })
 
-test('the shipped skins are exactly the 16 names, each one file with a dark half then a light half', () => {
+test('the shipped skins are exactly the 17 names, each one file with a dark half then a light half', () => {
   const dir = path.join(tool, 'presets')
   // Written out here on purpose, independent of the generator's own table.
-  const SKINS = ['absolutely', 'ayu', 'catppuccin', 'classic', 'dracula', 'github', 'gruvbox', 'kanagawa', 'linea', 'night-owl', 'nord', 'one', 'rose-pine', 'solarized', 'tokyo-night', 'vs']
+  const SKINS = ['absolutely', 'ayu', 'catppuccin', 'classic', 'dracula', 'github', 'gruvbox', 'kanagawa', 'linea', 'night-owl', 'nord', 'oled', 'one', 'rose-pine', 'solarized', 'tokyo-night', 'vs']
   assert.deepEqual(readdirSync(dir).filter((n) => n.endsWith('.css')).map((n) => n.slice(0, -4)).sort(), SKINS)
   for (const n of SKINS) {
     const parts = blocks(readFileSync(path.join(dir, `${n}.css`), 'utf8'))
@@ -428,7 +428,7 @@ test('the generator removes only its own earlier file names, never a file it did
   const left = readdirSync(path.join(out, 'presets')).filter((n) => n.endsWith('.css')).map((n) => n.slice(0, -4))
   for (const gone of ['catppuccin-auto', 'warm-dark', 'verc']) assert.ok(!left.includes(gone), gone)
   for (const kept of ['my-custom', 'constructor', 'dotcheck-test']) assert.ok(left.includes(kept), kept)
-  assert.match(r.stdout, /WARNING: presets\/my-custom\.css is not one of the 16 skins/)
+  assert.match(r.stdout, /WARNING: presets\/my-custom\.css is not one of the 17 skins/)
   rmSync(out, { recursive: true, force: true })
 })
 
@@ -466,8 +466,8 @@ test('raycast dropdown: lists every pair and Off; off runs remove, a bad or unkn
   const values = data.map((o) => o.value)
   assert.equal(values[0], 'off')
   for (const f of readdirSync(path.join(tool, 'presets')).filter((n) => n.endsWith('.css'))) assert.ok(values.includes(f.slice(0, -4)), f)
-  assert.equal(data.length, 17) // Off plus the 16 skins, each with both halves
-  assert.equal(new Set(data.map((o) => o.title)).size, 17, 'titles are unique')
+  assert.equal(data.length, 18) // Off plus the 17 skins, each with both halves
+  assert.equal(new Set(data.map((o) => o.title)).size, 18, 'titles are unique')
   assert.ok(!data.some((o) => /Github/.test(o.title)), 'GitHub spelling')
   const base = mkdtempSync(path.join(tmpdir(), 'skin-raycast2-'))
   mkdirSync(path.join(base, 'skin-tool/raycast'), { recursive: true })

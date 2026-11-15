@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Builds presets/<skin>.css and ATTRIBUTION.md from the palette table below, in the exact shape skin.mjs
-// accepts: no comments, no quotes, nothing fetched. Since 17 Oct 2026 (the final set) there are 16 skins, each ONE
+// accepts: no comments, no quotes, nothing fetched. Since 17 Oct 2026 (the final set) there are 16 skins (17 with oled, 14 Nov 2026), each ONE
 // name with a dark half and a light half in one file (FAMILIES), so Claude shows whichever matches its own
 // Settings > Appearance (verified live 12 Oct 2026: the page follows Claude, not the Mac). The palettes below are halves:
 // they are never written as files of their own.
@@ -36,6 +36,7 @@ const PALETTES = {
   'absolutely-dark':  { src: 'adapted from colour values observed in the Absolutely theme of OpenAI\'s Codex app 26.1007.71326 (not affiliated)', note: 'Page, sidebar, text, muted and accent come from the Codex app\'s Absolutely theme. It defines no card, status, hover or selected colours: the card is the sidebar shade, status colours are borrowed from classic-dark, hover is computed, and the selected row is the clay accent mixed 30% into the sidebar (this project\'s pick; 22% came out too close to the hover).', bg: '#2d2d2b', side: '#373735', raised: '#373735', text: '#f9f9f7', text2: 'derived', muted: '#b2b2b0', accent: '#cc7d5e', danger: '#ec7e7e', success: '#0ca30c', warning: '#db9300', selected: '#644c41' },
   'linea-dark':       { src: 'adapted from colour values observed in the Linear theme of OpenAI\'s Codex app 26.1007.71326 (not affiliated)', note: 'Page and text are the Codex theme\'s chromeTheme surface and ink (#0f0f11, #e3e4e6), which override its editor colours; the card is its editor background (#17181d); accent is its dark chrome accent. Danger and success are its diff colours; warning is borrowed from classic-dark. Secondary text is derived: its sideBar.foreground #d8dce6 is almost the main text, so it would give no step down. Hover and selected are computed.', bg: '#0f0f11', side: '#080a0f', raised: '#17181d', text: '#e3e4e6', text2: 'derived', muted: '#636b7b', accent: '#606acc', danger: '#ff7e78', success: '#69c967', warning: '#db9300' },
   'kanagawa-wave':    { src: 'rebelot/kanagawa.nvim wave (colors.lua + themes.lua)', note: 'Theme roles: page ui.bg (sumiInk3), sidebar ui.bg_m3 (sumiInk0), card ui.bg_p1 (sumiInk4), text ui.fg (fujiWhite), secondary ui.fg_dim (oldWhite), muted syn.comment (fujiGray), accent syn.fun (crystalBlue), danger, warning and success diag.error, diag.warning and diag.ok. Hover is ui.bg_p1 (sumiInk4) and the selected row its selection ui.bg_visual (waveBlue1), the same roles as the lotus half. Its cursor line ui.bg_p2 (sumiInk5) is not used for hover: it stands out from the sidebar more than the selection does.', bg: '#1f1f28', side: '#16161d', raised: '#2a2a37', text: '#dcd7ba', text2: '#c8c093', muted: '#727169', accent: '#7e9cd8', danger: '#e82424', success: '#98bb6c', warning: '#ff9e3b', hover: '#2a2a37', selected: '#223249' },
+  'oled':             { src: 'Reskin original (14 Nov 2026)', note: 'True black for OLED screens: page and sidebar #000000 so those pixels switch off, cards #111111. Calm warm text at about 11.6:1 on black, below the 14 to 21:1 of white on black. Accent is the Ember orange. Original colours, no source theme. Its light half is the classic light half.', bg: '#000000', side: '#000000', raised: '#111111', text: '#c4c0b6', text2: '#a09c93', muted: '#8f8c85', accent: '#ff8a4c', danger: '#ff5d73', success: '#5fd38d', warning: '#e8bb52', hover: '#202020', selected: '#262626' },
 
   'catppuccin-latte': { mode: 'light', src: 'catppuccin/palette latte', bg: '#eff1f5', side: '#e6e9ef', raised: 'lighter', text: '#4c4f69', text2: '#5c5f77', muted: '#6c6f85', accent: '#1e66f5', danger: '#d20f39', success: '#40a02b', warning: '#df8e1d' , hover: '#d8dae1', selected: '#cccfd8' },
   'github-light':     { mode: 'light', src: 'primer/primitives light default (current)', bg: '#ffffff', side: '#f6f8fa', raised: '#ffffff', text: '#1f2328', text2: '#59636e', muted: '#818b98', accent: '#0969da', danger: '#d1242f', success: '#1a7f37', warning: '#9a6700' , hover: '#f4f6f8', selected: '#eff1f3' },
@@ -309,7 +310,7 @@ function css(c) {
 `
 }
 
-// The 16 skins: one name each, [dark half, light half]. Nothing else is written to presets/.
+// The 17 skins: one name each, [dark half, light half]. Nothing else is written to presets/.
 const FAMILIES = {
   classic: ['classic-dark', 'classic-light'],
   catppuccin: ['catppuccin-mocha', 'catppuccin-latte'],
@@ -327,6 +328,7 @@ const FAMILIES = {
   absolutely: ['absolutely-dark', 'absolutely-light'],
   linea: ['linea-dark', 'linea-light'],
   kanagawa: ['kanagawa-wave', 'kanagawa-lotus'],
+  oled: ['oled', 'classic-light'],
 }
 for (const [family, [d, l]] of Object.entries(FAMILIES)) {
   if (!PALETTES[d] || !PALETTES[l]) throw new Error(`skin ${family}: missing palette ${!PALETTES[d] ? d : l}`)
@@ -421,7 +423,7 @@ for (const f of Object.keys(FAMILIES)) {
 
 // Only now, with the new files written and accepted: the files this generator wrote before 17 Oct 2026 (per-half and
 // -auto presets) are removed by name. Any other unknown file is left alone and reported (never delete
-// what the generator did not make; the tests refuse a presets/ folder that is not exactly the 16 skins).
+// what the generator did not make; the tests refuse a presets/ folder that is not exactly the 17 skins).
 const OBSOLETE = ['catppuccin-auto', 'catppuccin-latte', 'catppuccin-mocha', 'classic-auto', 'classic-dark', 'classic-light', 'github-auto',
   'github-dark', 'github-light', 'gruvbox-auto', 'gruvbox-dark', 'gruvbox-light', 'one-auto', 'one-dark', 'one-light', 'rose-pine-auto',
   'rose-pine-dawn', 'solarized-light', 'tokyo-night-auto', 'tokyo-night-day', 'warm-dark',
@@ -431,7 +433,7 @@ for (const f of readdirSync(dir).filter((x) => x.endsWith('.css'))) {
   const n = f.slice(0, -4)
   if (Object.hasOwn(FAMILIES, n) || n.startsWith('dotcheck-')) continue
   if (OBSOLETE.includes(n)) { unlinkSync(path.join(dir, f)); console.log(`removed presets/${f} (an earlier generated name)`) }
-  else console.log(`WARNING: presets/${f} is not one of the 16 skins and was not made by this generator; left in place`)
+  else console.log(`WARNING: presets/${f} is not one of the 17 skins and was not made by this generator; left in place`)
 }
 
 // ---- ATTRIBUTION.md: sources, licences and every derived value ----
@@ -460,6 +462,7 @@ Anthropic, GitHub, or any of the colour scheme projects. "Claude" is a trademark
 | Night Owl, Light Owl | MIT | github.com/sdras/night-owl-vscode-theme |
 | VS (Dark+, Light+) | MIT | github.com/microsoft/vscode (extensions/theme-defaults) |
 | Kanagawa (wave, lotus) | MIT (Copyright (c) 2021 Tommaso Laurenzi) | github.com/rebelot/kanagawa.nvim (lua/kanagawa/colors.lua, lua/kanagawa/themes.lua) |
+| OLED (dark; light half is Classic light) | MIT (this project's own colours) | this repository |
 | Absolutely, Linea | no separate theme licence found in the inspected app bundle | Adapted from colour values observed in the Absolutely and Linear themes of OpenAI's Codex app (version 26.1007.71326); not affiliated with OpenAI or Linear. Colour values only; no permission is claimed. |
 | Classic dark, Classic light | Apache-2.0 covers only the brand-guidelines skill's palette (no trademark rights are granted); the colours observed in Claude's published stylesheet carry no licence of their own | github.com/anthropics/skills (brand-guidelines); Claude's stylesheet as served to the desktop app |
 
@@ -516,7 +519,7 @@ import { chmodSync } from 'node:fs'
 const rdir = path.join(OUT, 'raycast')
 mkdirSync(rdir, { recursive: true })
 const pretty = (n) => n.split('-').map((w) => ({ github: 'GitHub' })[w] ?? w[0].toUpperCase() + w.slice(1)).join(' ')
-const TITLES = { one: 'One', vs: 'VS', 'rose-pine': 'Rose Pine', 'night-owl': 'Night Owl', 'tokyo-night': 'Tokyo Night' }
+const TITLES = { one: 'One', oled: 'OLED', vs: 'VS', 'rose-pine': 'Rose Pine', 'night-owl': 'Night Owl', 'tokyo-night': 'Tokyo Night' }
 const opts = [{ title: 'Remove skin', value: 'off' }, ...Object.keys(FAMILIES).map((f) => ({ title: TITLES[f] ?? pretty(f), value: f }))]
 
 const script = `#!/bin/bash
