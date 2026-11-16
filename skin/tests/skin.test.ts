@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On, Plugin, RenderElement } from 'claude-code'
 
 import { FONT_LABELS, FONT_WEIGHTS, SECTIONS, shortStatus, allPicks, defaultPicks, lookInfoOf, lookSummary, noLookText, picksOf, resultLineOf, setArgs, sizeOptions, weightOptions, withFont, fontOptions } from '../hooks/fonts'
-import { retiredText, skinAlias } from '../hooks/logic'
+import { retiredText, skinAlias, customAnswer, CUSTOM_NEEDS_LIGHT, savedFromLight, sharedPath, savedNamesOf, savedOf, withSaved, lightEnabled } from '../hooks/logic'
 import { chipsOf } from '../hooks/band'
 import { ABOUT, CARD, DEV_MODE, TIME_UP, START_DONE, START_FACTS, cardFacts, cardParagraph, planOf, startResult, startStatus, startSummary, countdownSvg, displayName, listText, modeOf, nodeCandidates, nodeMajorOk, noHelper, parse, skinSuggestions, oneClickOf, fontsOf, FONT_NAMES, argumentHintOf, summary, toolDirCandidates } from '../hooks/logic'
 
@@ -245,6 +245,46 @@ test('/skin dracula with no helper asks for one tick, shows the prompt the momen
   expect(w.statuses.at(-1)).toBe(undefined) // cleared at the end
   expect(r.text).toContain('Skin dracula applied.')
   expect(r.text).toContain('helper: active until Claude quits')
+})
+
+test('/skin custom belongs to Reskin light: never read as a skin, no tool run; without light it says where it lives', OPTS, async ($, on) => {
+  const w = world(on)
+  await $.session.start({ cwd: '/p', surface: 'desktop', isInteractive: true })
+  const r = await $.command.run(cmd('custom bg #ffffff fg #111111'))
+  expect(r.text).toBe(CUSTOM_NEEDS_LIGHT)
+  expect(tool(w.runs)).toHaveLength(0)
+  expect(w.spawns).toHaveLength(0)
+  expect(customAnswer({ text: 'Reskin light: Claude accepts these colours.' })).toBe('Reskin light: Claude accepts these colours.')
+  expect(customAnswer({ text: 'no command.run hook answered /skin' })).toBe(CUSTOM_NEEDS_LIGHT)
+  expect(parse('customs').kind === 'apply').toBe(true) // only the exact word is light's
+})
+
+test('a saved skin answered by Reskin light: its text is kept, minus the turn-full-off-yourself line', () => {
+  const t = 'Reskin light: your skin "my-blue" on. Other sessions follow within about 2 seconds.'
+  expect(savedFromLight({ text: t + "\nIf Reskin full's colours are on, they cover these: type /skin off, then /skin my-blue." })).toBe(t)
+  expect(savedFromLight({ text: 'Reskin light: Nord on.' })).toBe(undefined)
+  expect(savedFromLight({ text: 'no command.run hook answered /skin' })).toBe(undefined)
+  expect(savedFromLight(undefined)).toBe(undefined)
+})
+
+test('saved skins from Reskin light: the shared file, the menu values, and their place before Claude\'s own', () => {
+  expect(sharedPath('/Users/x/.claude/plugins/cache/reskin-for-claude/skin/2.3.0')).toBe('/Users/x/.claude/reskin/saved-skins.json')
+  expect(sharedPath('/Users/x/dev/skin')).toBe(undefined)
+  expect(savedNamesOf('{"names":["my-blue","Bad Name","../x",3,"raycast"]}')).toEqual(['my-blue', 'raycast'])
+  expect(savedNamesOf('not json')).toEqual([])
+  expect(savedOf('mine:my-blue')).toBe('my-blue')
+  expect(savedOf('mine:../x')).toBe(undefined)
+  expect(savedOf('dracula')).toBe(undefined)
+  // Command words, skins and short names are never saved names, whatever the file says.
+  expect(savedNamesOf('{"names":["remove","off","fonts","custom","dra","dracula","claude","my-blue"]}', n => n === 'dracula')).toEqual(['my-blue'])
+  expect(savedOf('mine:remove')).toBe(undefined)
+  expect(savedOf('mine:dracula', n => n === 'dracula')).toBe(undefined)
+  expect(lightEnabled({ 'reskin-light@reskin-for-claude': true })).toBe(true)
+  expect(lightEnabled({ 'reskin-light@reskin-for-claude': false, 'skin@reskin-for-claude': true })).toBe(false)
+  expect(lightEnabled(undefined)).toBe(false)
+  const o = withSaved([{ value: 'dracula', label: 'Dracula' }, { value: 'off', label: "Claude's own colours" }], ['my-blue'])
+  expect(o.map(x => x.value)).toEqual(['dracula', 'mine:my-blue', 'off'])
+  expect(o[1]!.label).toBe('my-blue (yours)')
 })
 
 test('a switch that could not tell about the helper never falls back to a tick', OPTS, async ($, on) => {

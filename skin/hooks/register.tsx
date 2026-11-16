@@ -6,7 +6,7 @@ import { SECTIONS, allPicks, defaultPicks, fontOptions, lookInfoOf, noLookText, 
 import type { SectionId } from './fonts'
 import { APPEND_SH, BoundedText, Capture, ENTRY_MAX_BYTES, LOG_DIR, LOG_FILE, LOG_MAX_BYTES, Milestones, appearanceOf, formatEntry, logView, macModeOf, portOf } from './log'
 import type { LogRecord, PortState, Step } from './log'
-import { ABOUT, CARD, RING_SIZE, cardFacts, cardParagraph, planOf, startResult, startStatus, startSummary, countdownSvg, displayName, listText, modeOf, noHelper, nodeCandidates, nodeMajorOk, isSkinName, parse, skinSuggestions, oneClickOf, fontsOf, argumentHintOf, summary, toolDirCandidates, retiredText, skinAlias } from './logic'
+import { ABOUT, CARD, RING_SIZE, cardFacts, cardParagraph, planOf, startResult, startStatus, startSummary, countdownSvg, displayName, listText, modeOf, noHelper, nodeCandidates, nodeMajorOk, isSkinName, parse, skinSuggestions, oneClickOf, fontsOf, argumentHintOf, summary, toolDirCandidates, retiredText, skinAlias, customAnswer, savedFromLight, sharedPath, savedNamesOf, savedOf, withSaved, lightEnabled } from './logic'
 import type { Preset } from './logic'
 import { BAND0, FONTS_OPENER, LOCK_WAIT_ARG, LOCK_WAIT_MS, NO_PROOF, OWN_WORK_WAIT_MS, PROOF_TTL_MS, SIDEBAR_OPENER, SIDEBAR_OPTIONS, SKINS_OPENER, STILL_FINISHING, OPENER_LABELS, SHORT_SETUP_BELOW, actionOf, bandStatusOf, bandWord, chipsOf, proofOf, rowState, skinLabel, skinOptions, sidebarDone } from './band'
 import type { Band, BandRow, NowOn, Proof, RowId } from './band'
@@ -17,12 +17,46 @@ const card = atom({ plugin: 'skin', key: 'card' } as const, null as TickCard | n
 const fontsCard = atom({ plugin: 'skin', key: 'fontsCard' } as const, null as FontsCard | null)
 // The appearance band (5 Nov 2026): on or off, the open Skins or Sidebar row, and what the openers may claim.
 const band = atom({ plugin: 'skin', key: 'band' } as const, BAND0 as Band)
+// The Custom tab (the owner, 16 Nov): open while Reskin light's colour fields show under the tabs. Reskin light reads this
+// (its own band draws when it is true) and its ✕ (key LIGHT_CLOSE) closes it.
+const customOpen = atom({ plugin: 'skin', key: 'customOpen' } as const, false)
+const CUSTOM_OPENER = 'skin-custom-open'
+const LIGHT_CLOSE = 'colours-close'
 // Band (5 Nov 2026): work the mod stopped waiting for (a change at its soft limit, a read at its deadline), still being
 // drained to its end. A tick waits for it, and for a running band operation, first (the tool's lock guards every run).
 const tails = new Set<Promise<void>>()
 let expiry: { cancel: () => void } | undefined
 // The preset names, cached for the Skins dropdown (read when a row opens).
 let presetNames: string[] = []
+// Reskin light's saved skins, from its shared file: read again whenever the file changes (a stat per drawing).
+let saved: { mtime: number; names: string[]; light: boolean } = { mtime: -1, names: [], light: false }
+// Whether Reskin light is enabled (Claude's enabledPlugins), read at most every 10 s.
+let lightOn = { at: -Infinity, on: false }
+// For the command flow, whose own `saved` (the answer line) shadows the module's.
+const savedState = () => saved
+// The last saved-skin run and whether this flavour's own colours went off for it (Apply's status reads it).
+let lastSavedRun: { name: string; ok: boolean } | null = null
+export const YOURS_LINE = 'Your skins (Code tab, Reskin light): '
+// A skin name of this flavour is never a saved name.
+const takenName = (n: string) => presetNames.includes(n) || (names?.list ?? []).includes(n)
+async function refreshSaved($: EngineInterface): Promise<void> {
+  const path = sharedPath($.plugin.root)
+  if (path === undefined) return
+  if (Date.now() - lightOn.at > 10_000) {
+    const enabled = await $.settings.read({ key: 'enabledPlugins' }).catch(() => undefined)
+    const on = lightEnabled(enabled)
+    // Off now, or on again: the file is read afresh.
+    if (on !== lightOn.on) saved = { mtime: -1, names: [], light: false }
+    lightOn = { at: Date.now(), on }
+  }
+  if (!lightOn.on) { saved = { mtime: -1, names: [], light: false }; return }
+  try {
+    const st = await $.fs.stat(path)
+    if (st.mtimeMs !== saved.mtime) saved = { mtime: st.mtimeMs, names: savedNamesOf(await $.fs.read(path), takenName), light: true }
+  } catch {
+    saved = { mtime: -1, names: [], light: false }
+  }
+}
 // A change the mod stopped waiting for: it keeps running in the tool, and its answer is not known yet.
 class StillFinishing extends Error {}
 const LONG_WAIT_MS = 60_000 // after the soft limit: the never-expected last resort before the mod ends the child
@@ -392,14 +426,34 @@ export const register: Register = (on, options) => {
     // the row opens: opening redraws the band, and a press passed on after that would find its drawing gone (the
     // opener's own onPress does nothing).
     // Busy (an operation or a /skin run): refused at once with a note, before anything else.
+    // Reskin light's ✕ on its colour fields closes the Custom tab.
+    if (e.plugin === 'reskin-light' && e.element === LIGHT_CLOSE) { await update($, customOpen, () => false); return next(e) }
+    if (e.element === CUSTOM_OPENER) { const r = await next(e); await openCustom($); return r }
     const opener = e.element === FONTS_OPENER || e.element === SKINS_OPENER || e.element === SIDEBAR_OPENER
+    if (opener) await update($, customOpen, () => false)
     if (opener && !freeNow()) { toast($, BUSY_NOTE); return next(e) }
     if (e.element === FONTS_OPENER) { const r = await next(e); await openFromButton($); return r }
     if (e.element === SKINS_OPENER || e.element === SIDEBAR_OPENER) { const r = await next(e); await openRow($, e.element === SKINS_OPENER ? 'skins' : 'sidebar'); return r }
     // Every row button acts only when it is Reskin's own.
     if (e.plugin !== 'skin') return next(e)
     if (e.element === 'skin-band-close') await closeRow($, 'band')
-    else if (e.element === 'skin-band-apply') await bandAction($, 'band', 'apply')
+    else if (e.element === 'skin-band-apply') {
+      // One of your saved skins (Reskin light): the same as typing /skin <name>, Reskin light paints it and this mod's own
+      // colours go off (see command.run). Queued until the session is idle, its lines in the chat as a typed one.
+      const b = await read($, band)
+      if (b.row === 'skins') await refreshSaved($)
+      const fresh = b.row === 'skins' && !b.busy ? savedOf(b.drafts.skin, takenName) : undefined
+      const own = fresh !== undefined && saved.names.includes(fresh) ? fresh : undefined
+      if (own === undefined) await bandAction($, 'band', 'apply')
+      else {
+        await update($, band, x => ({ ...x, status: `Putting on your skin "${own}"…`, touched: false }))
+        lastSavedRun = null
+        void $.command.run({ command: 'skin', args: own })
+          .then(() => update($, band, x => ({ ...x, status: lastSavedRun?.name === own && lastSavedRun.ok ? `Your skin "${own}" is on.` : `That did not finish: type /skin ${own} to see why.` })))
+          .catch(() => update($, band, x => ({ ...x, status: `Type /skin ${own} to put it on.` })))
+      }
+    }
+
     else if (e.element === 'skin-band-reset') await bandAction($, 'band', 'reset')
     else if (e.element === 'skin-band-setup') await bandAction($, 'band', 'setup')
     else if (e.element === 'skin-fonts-setup') await bandAction($, 'fonts', 'setup')
@@ -439,13 +493,24 @@ export const register: Register = (on, options) => {
     // Reskin light (2.1.0): a mod loaded after this one (the light flavour) sees every /skin first, so its Code tab
     // colours follow /skin <name> and /skin off whichever mod loads first. Its answer is not used here; a failure in it
     // never stops this command.
-    await Promise.resolve().then(() => next(e)).catch(() => undefined)
+    const light = await Promise.resolve().then(() => next(e)).catch(() => undefined)
+    // /skin custom (your own colours) belongs to Reskin light: show its answer, never read it as a skin name here.
+    if (/^\s*custom(\s|$)/i.test(e.args)) return { text: customAnswer(light) }
     // The appearance band (5 Nov 2026): /skin band on|off, remembered. Changes nothing in Claude's look.
     const bw = bandWord(e.args)
     if (bw === 'bad') return { text: 'Use /skin band on or /skin band off.' }
     if (bw !== null) return { text: await setBand($, bw) }
     // Bounded: a slow folder read never holds a typed command; the last list is used then.
-    const parsed = parse(e.args, (await within($, skinNames($), names?.list ?? [], 10_000), oneClickNow))
+    // One of your saved skins (Reskin light, 2.3.0): light has put it on; these colours go off so it shows.
+    // Reskin light answers beneath this mod with SAVED_START; above it, light has already painted and this mod finds the
+    // name in its shared file (refreshed now).
+    let saved = savedFromLight(light)
+    const typed = e.args.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    if (saved === undefined && typed.length === 1) {
+      await refreshSaved($)
+      if (savedState().names.includes(typed[0]!)) saved = `Code tab colours (Reskin light): your skin "${typed[0]}".`
+    }
+    const parsed = parse(saved !== undefined ? 'off' : e.args, (await within($, skinNames($), names?.list ?? [], 10_000), oneClickNow))
     if (parsed.kind === 'about') return { text: ABOUT }
     if (parsed.kind === 'log') return { text: await showLog($) }
     // Every other /skin run leaves one entry in the log, whatever happens.
@@ -472,6 +537,19 @@ export const register: Register = (on, options) => {
       command: `/skin ${e.args.trim()}`.trim(), tool, preset, steps, shown: answer.text, result: answer.result,
       exitCode: steps.at(-1)?.exitCode ?? null, t0, ms, portBefore, portAfter: toolPort ?? portNow($), portAfterFrom: toolPort ? 'the tool\'s own last check' : 'checked as the run ended',
     })
+    if (saved !== undefined) {
+      const name = /your skin "([a-z0-9-]+)"/.exec(saved)?.[1] ?? ''
+      const ok = answer.result === 'ok'
+      lastSavedRun = { name, ok }
+      const still = ok ? '' : `\nThis flavour's colours may still cover it: type /skin off, then /skin ${name}.`
+      return { text: `${saved}\n${answer.text}${still}` }
+    }
+    if (parsed.kind === 'list' && answer.result !== 'refused') {
+      // Your saved skins (Reskin light) belong in the list too, whichever flavour wraps the other.
+      await refreshSaved($)
+      const yours = savedState().names
+      if (yours.length > 0) return { text: `${answer.text}\n${YOURS_LINE}${yours.join(', ')}. /skin <name> puts one on.` }
+    }
     return { text: answer.text }
   })
 }
@@ -629,6 +707,21 @@ async function openRow($: EngineInterface, row: BandRow) {
     }))
     await applyProof($, await lookShow($, true))
   })
+}
+
+// The Custom tab: closes any open row (one at a time) and turns these colours off when that needs no tick, or they
+// would cover Reskin light's while you type. Pressed again, it closes.
+async function openCustom($: EngineInterface) {
+  if (await read($, customOpen)) { await update($, customOpen, () => false); return }
+  const b = await read($, band)
+  if (b.helper === 'active' && b.proof?.skin !== 'off' && !b.busy) {
+    // Reset runs on the Skins row's action; the row closes again right after.
+    await update($, band, x => (x.busy ? x : { ...x, row: 'skins', rowId: x.rowId + 1 }))
+    await bandAction($, 'band', 'reset')
+  }
+  await update($, fontsCard, () => null)
+  await update($, band, x => (x.busy ? x : { ...x, row: null, rowId: x.rowId + 1, status: '' }))
+  await update($, customOpen, () => true)
 }
 
 // ✕ on a band row, ✕ on the fonts row, /skin fonts off: an operation too (refused with a note while one runs).
@@ -1064,6 +1157,8 @@ function drawBand($: EngineInterface, e: any, next: (e: any) => unknown, b: Band
   return (async () => {
     const drawn = await Promise.resolve(next(e)).catch(() => null)
     const below = drawn !== null && typeof drawn === 'object' && (drawn as { type?: string }).type !== 'engine' ? drawn : null
+    if (b.on || b.row === 'skins') await refreshSaved($)
+    const custom = b.on && saved.light && (await read($, customOpen))
     const ui = $.ui.resolve(e)
     const { Box, Text, Button } = ui
     const accent = b.proof?.accent ?? undefined
@@ -1076,6 +1171,9 @@ function drawBand($: EngineInterface, e: any, next: (e: any) => unknown, b: Band
         {op(SKINS_OPENER, 'skins', OPENER_LABELS.skins)}
         {op(FONTS_OPENER, 'fonts', OPENER_LABELS.fonts)}
         {op(SIDEBAR_OPENER, 'sidebar', OPENER_LABELS.sidebar)}
+        {saved.light && (custom
+          ? <Button key={CUSTOM_OPENER} plain onPress={() => {}}><Text bold color={accent}>Custom</Text></Button>
+          : <Button key={CUSTOM_OPENER} label="Custom" plain dimColor onPress={() => {}} />)}
       </Box>
     )
     // The row under the openers, or alone.
@@ -1153,7 +1251,7 @@ function bandParts($: EngineInterface, ui: Ui, b: Band, accent: string | undefin
   else if (!st.controls) notes.push(<Text key="skin-band-text" dimColor wrap="wrap">{st.text}</Text>)
   else if (Select === undefined) notes.push(<Text key="skin-band-nosel" dimColor wrap="wrap">Use the desktop app to choose.</Text>)
   else if (b.row === 'skins') {
-    const options = skinOptions(presetNames)
+    const options = withSaved(skinOptions(presetNames), saved.names)
     controls.push(held(ui, 'skin-band-skin', options, <Select key="skin-band-skin" value={b.drafts.skin} options={options} onSelect={(v: string) => pick(d => ({ ...d, skin: v }))} />))
   } else {
     controls.push(held(ui, 'skin-band-sidebar', SIDEBAR_OPTIONS, <Select key="skin-band-sidebar" value={b.drafts.sidebar} options={[...SIDEBAR_OPTIONS]} onSelect={(v: string) => pick(d => ({ ...d, sidebar: v === 'off' ? 'off' : 'on' }))} />))

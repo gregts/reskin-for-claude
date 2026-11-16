@@ -62,6 +62,6 @@ export type NowOn = { skin: string; light: readonly string[]; dark: readonly str
 
 declare module 'claude-code' {
   interface PluginState {
-    skin: { card: TickCard | null; fontsCard: FontsCard | null; band: Band }
+    skin: { card: TickCard | null; fontsCard: FontsCard | null; band: Band; customOpen: boolean }
   }
 }
