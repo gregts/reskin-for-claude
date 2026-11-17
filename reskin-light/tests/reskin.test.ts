@@ -59,10 +59,10 @@ test('every skin has a unique 3-letter short name, and none is a full-flavour wo
   for (const w of FULL_WORDS) expect(w === 'off' ? skinName(w) : skinName(w)).toBe(w === 'off' ? 'off' : undefined)
 })
 
-test('with the full flavour owning /skin: listens, sets colours, and lets the full flavour answer', async ($, on) => {
+test('with another mod owning /skin (Reskin full not enabled): listens, sets colours, and lets it answer', async ($, on) => {
   const sets: any[] = [], clears = { n: 0 }, mem: Record<string, unknown> = { skin: 'nord' }
   const reg = { n: 0 }
-  ENGINE(on, sets, clears, mem, [{ name: 'skin', description: 'full', source: 'plugin', plugin: 'skin' }], reg)
+  ENGINE(on, sets, clears, mem, [{ name: 'skin', description: 'full', source: 'plugin', plugin: 'claude-skins' }], reg)
   // The full flavour, beneath this mod: answers everything itself.
   on('command.run', { command: 'skin' }, (_: unknown, e: any) => ({ text: 'FULL: ' + e.args }))
   mock.clock(on)

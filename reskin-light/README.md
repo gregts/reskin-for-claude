@@ -28,10 +28,9 @@ Then open a new Code tab session in the Claude desktop app (or type `/reload-plu
 Skins: absolutely, ayu, catppuccin, classic, dracula, github, gruvbox, kanagawa, linea, night-owl, nord, oled,
 one, rose-pine, solarized, tokyo-night, vs. Dracula is on until you pick one.
 
-With Reskin's full flavour installed too, its `/skin` answers, and these colours follow `/skin <skin>` and `/skin off`
-typed on their own (with or without `--tick`). `/skin custom` and your saved skins are answered by this flavour either way; if the full
-flavour's colours are on, they cover yours, so type `/skin off` and then `/skin custom`. Longer one-line commands such as `/skin nord font plex` are left to the
-full flavour.
+Use this flavour or Reskin's full flavour, not both. If the full flavour is turned on too, this flavour switches
+itself off (its colours, `/skin custom` and your saved skins) and the full flavour answers `/skin`. To come back, run
+`claude plugin disable skin@reskin-for-claude` in Terminal, then quit Claude completely (Cmd+Q) and open it again.
 
 ## Your own colours
 
@@ -49,16 +48,13 @@ Make your own skin in three steps:
 - A name can be letters, numbers and hyphens, and never a Reskin skin or command word.
 - One line works too: `/skin custom bg #ffffff fg #111111 accent #e66`. `/skin custom copy` gives your colours as a
   line like that.
-- With the full flavour's colours on, `/skin my-blue` turns them off for you so yours show (with no click once its
-  colour helper is running). With the full flavour's band on, its **Custom** tab opens these same fields, and your
-  saved skins show in its Skins menu.
 
 There is no colour picker: Claude's mod controls have text fields only, so colours are typed as codes like `#1e1e2e`.
 
 ## What it cannot do
 
 Claude's mod colours reach the Code tab only. The Chat tab, fonts, text sizes and bigger sidebar headers need
-Reskin's full flavour, which works on top of these colours.
+Reskin's full flavour, used instead of this one.
 
 Nine dark halves differ from Reskin's full flavour so Claude agrees to paint them, most slightly and One's warning
 colour clearly (it refuses a whole theme

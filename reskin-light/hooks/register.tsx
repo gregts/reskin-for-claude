@@ -32,11 +32,6 @@ const FIELDS: { key: keyof Three; label: string }[] = [
   { key: 'fg', label: 'Text' },
   { key: 'accent', label: 'Accent' },
 ]
-export const SKIN_OPTIONS = [
-  { value: 'claude', label: "Claude's own" },
-  ...Object.entries(EXTRA).map(([value, x]) => ({ value, label: x.label })),
-  ...Object.entries(SKINS).map(([value, s]) => ({ value, label: s.label })),
-]
 
 /** What the band shows for a skin a person already uses, so they can change one colour of it. */
 export function draftFrom(name: string): Custom {
@@ -67,24 +62,6 @@ export function nameProblem(name: string): string | undefined {
   return undefined
 }
 
-// Reskin full reads your saved names from one small file both flavours can find: <Claude's config folder>/reskin/
-// saved-skins.json, next to the plugins folder both are installed in. It lists names only (no colours), so its Skins
-// menu can offer them; picking one there runs /skin <name>, answered here.
-export const SHARED_FILE = 'reskin/saved-skins.json'
-export function sharedPath(root: string): string | undefined {
-  const i = root.indexOf('/plugins/cache/')
-  return i > 0 ? `${root.slice(0, i)}/${SHARED_FILE}` : undefined
-}
-export async function writeShared($: Dollar): Promise<void> {
-  const path = sharedPath($.plugin.root)
-  if (path === undefined) return
-  try {
-    await $.fs.write(path, JSON.stringify({ names: Object.keys(await mine($)).sort() }) + '\n')
-  } catch {
-    // Only Reskin full's menu misses the names; /skin <name> still works.
-  }
-}
-
 /** Your saved skins, only the well-formed ones Claude would paint. */
 export async function mine($: Dollar): Promise<Record<string, Custom>> {
   const m = await $.store.get(MINE_KEY)
@@ -106,7 +83,7 @@ export async function mine($: Dollar): Promise<Record<string, Custom>> {
 // and each session's copy of this mod checks it every 2 seconds and repaints when it changes.
 
 // The command is /skin, the same word as Reskin's full flavour. When the full flavour is loaded it owns /skin
-// and this mod only listens (see the session.start hook and report.md, "One /skin for both flavours").
+// and this mod stands down for the whole session (one flavour at a time, 2.3.1).
 export const COMMAND = 'skin'
 export const DEFAULT_SKIN = 'dracula'
 export const SYNC_MS = 2000
@@ -114,7 +91,7 @@ const NAMES = Object.keys(SKINS)
 
 // Words the full flavour's /skin uses: never read as skin names, never answered here when the full flavour is in.
 export const FULL_WORDS = ['off', 'remove', 'status', 'check', 'list', 'log', 'about', 'font', 'fonts', 'type', 'band']
-// This mod's own word, never a skin name: /skin custom (your own colours). Both flavours leave it to this mod.
+// This mod's own word, never a skin name: /skin custom (your own colours).
 export const CUSTOM_WORD = 'custom'
 
 const simple = (t: string) => t.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\s_]+/g, '-')
@@ -187,12 +164,26 @@ export async function wanted($: Dollar): Promise<Wanted> {
 let painted: string | undefined
 let timer: { cancel: () => void } | undefined
 let busy = false
-// Whether this copy registered /skin (no other mod owns it). False: the full flavour answers and this mod listens.
+// Whether this copy registered /skin (no other mod owns it). False: another mod owns /skin and this mod listens.
 let ownsCommand = true
+// One flavour at a time (2.3.1, the owner, 17 Nov): with Reskin full enabled this mod stands down for the whole session.
+// It paints nothing, answers nothing and draws nothing. Nothing needs clearing: a mod's theme lasts only for the session
+// that sets it, so a session this mod does not paint has none of its colours.
+let standing = false
+/** Whether Reskin full (plugin "skin", from any marketplace) is enabled in Claude's merged enabledPlugins setting:
+ * true, or a version list (Claude counts both as enabled). */
+export function fullEnabled(enabled: unknown): boolean {
+  return enabled !== null && typeof enabled === 'object' && Object.entries(enabled as Record<string, unknown>).some(([k, v]) => k.startsWith('skin@') && (v === true || Array.isArray(v)))
+}
+/** Reskin full is in when it is enabled, or when it owns /skin (every mod has started by then, in either load order). */
+export function fullIsIn(enabled: unknown, owner: { plugin?: string } | undefined): boolean {
+  return fullEnabled(enabled) || owner?.plugin === 'skin'
+}
 export const OWN_NAME = 'reskin-light'
 
 async function paint($: Dollar, w: Wanted, atStart = false): Promise<string> {
   painted = w.key
+  if (standing) return 'standing down'
   if (w.custom !== undefined) {
     const v = check(w.custom)
     if (!v.ok || v.theme === undefined) return 'not made'
@@ -237,23 +228,12 @@ function label(name: string): string {
 const customKey = (c: Custom) => CUSTOM_WORD + ':' + JSON.stringify(c)
 const savedKey = (name: string, c: Custom) => 'mine:' + name + ':' + JSON.stringify(c)
 
-// Reskin full looks for this start to know Reskin light put on a saved skin (it then turns its own colours off).
+// The start of the answer when a saved skin goes on.
 export const SAVED_START = 'Reskin light: your skin "'
-// Reskin full's Custom tab (beside Sidebar in its band): while it is open these fields draw under its tabs, and the ✕
-// here (key colours-close) closes it there too. Read only; Reskin full owns it.
-const FULL_CUSTOM = { plugin: 'skin', key: 'customOpen' } as const
-// Which opening of Reskin full's Custom tab is showing: its version counts every open and close.
-async function fullTab($: Dollar): Promise<{ open: boolean; version: number }> {
-  const r = await $.state.get(FULL_CUSTOM).catch(() => ({ value: false, version: 0 }))
-  return { open: r.value === true, version: r.version }
-}
-// A note belongs to the opening it was written in, so the band always opens clean (the owner, 16 Nov: an old "Saved" line
-// showed on opening).
+// Notes live in the band and are cleared by /skin custom and ✕, so it always opens clean.
 async function setNote($: Dollar, n: Note | null): Promise<void> {
-  const stamp = (await fullTab($)).version
-  await update($, note, () => (n === null ? null : { ...n, stamp }))
+  await update($, note, () => n)
 }
-export const FULL_COVERS = "If Reskin full's colours are on, they cover these"
 
 /** Save the band's colours under a name, and put them on in every Code tab session. */
 export async function saveAs($: Dollar, typed: string): Promise<Note> {
@@ -270,21 +250,19 @@ export async function saveAs($: Dollar, typed: string): Promise<Note> {
     await $.store.set(MINE_KEY, { ...m, [name]: c })
     await $.store.set('skin', name)
     await paint($, { key: savedKey(name, c), name, custom: c })
-    await writeShared($)
-    n = { tone: 'ok', text: `${had ? 'Updated' : 'Saved'} "${name}". It is a skin now: pick it in the Skins menu, or type /skin ${name}.` }
+    n = { tone: 'ok', text: `${had ? 'Updated' : 'Saved'} "${name}". It is a skin now: type /skin ${name} to put it back on.` }
   }
   await setNote($, n)
   return n
 }
 
 /** Put a saved skin on in every Code tab session. */
-async function useSaved($: Dollar, name: string, c: Custom, fullIn: boolean): Promise<{ text: string }> {
+async function useSaved($: Dollar, name: string, c: Custom): Promise<{ text: string }> {
   await $.store.set('skin', name)
   const r = await paint($, { key: savedKey(name, c), name, custom: c })
   await update($, draft, () => c)
   const shown = r === 'drawn' ? '' : ' (it shows once this session is the one in view)'
-  const full = fullIn ? `\n${FULL_COVERS}: type /skin off, then /skin ${name}.` : ''
-  return { text: `${SAVED_START}${name}" on${shown}. Other sessions follow within about 2 seconds.${full}` }
+  return { text: `${SAVED_START}${name}" on${shown}. Other sessions follow within about 2 seconds.` }
 }
 
 // The band's actions, and the /skin custom lines, go through here: one place saves and paints.
@@ -319,9 +297,8 @@ export async function coloursOff($: Dollar): Promise<Note> {
 }
 
 // /skin custom [line]. Alone: your saved colours back on (if any) and the colours band opens. With a line: those colours.
-export async function customCommand($: Dollar, rest: string, fullIn: boolean): Promise<{ text: string }> {
+export async function customCommand($: Dollar, rest: string): Promise<{ text: string }> {
   const word = rest.trim().toLowerCase()
-  const fullLine = fullIn ? "\nIf Reskin full's colours are on, they cover these: type /skin off, then /skin custom." : ''
   const how = ' Pick Light or Dark, type three colour codes (they show as you type), then type a name in "Save as" and press Enter. It becomes a skin: /skin <name> puts it back on.'
   if (word === '' || word === 'band' || word === 'panel') {
     const saved = await savedCustom($)
@@ -344,7 +321,7 @@ export async function customCommand($: Dollar, rest: string, fullIn: boolean): P
     }
     await setNote($, null)
     await update($, bandOpen, () => true)
-    return { text: 'Reskin light: ' + first + ' The colours band is open above the message box (✕ closes it).' + how + ' It paints the Code tab in every session; fonts and the Chat tab need Reskin full.' + fullLine }
+    return { text: 'Reskin light: ' + first + ' The colours band is open above the message box (✕ closes it).' + how + ' It paints the Code tab in every session.' }
   }
   if (word === 'forget' || word.startsWith('forget ') || word === 'delete' || word.startsWith('delete ')) {
     const name = savedName(word.replace(/^(forget|delete)\s*/, ''))
@@ -355,7 +332,6 @@ export async function customCommand($: Dollar, rest: string, fullIn: boolean): P
     }
     const { [name]: _gone, ...rest } = m
     await $.store.set(MINE_KEY, rest)
-    await writeShared($)
     let after = ''
     if ((await $.store.get('skin')) === name) {
       await $.store.set('skin', 'off')
@@ -368,12 +344,12 @@ export async function customCommand($: Dollar, rest: string, fullIn: boolean): P
   if (word === 'fix') {
     const fixed = makeReadable(await read($, draft))
     if (fixed === undefined) return { text: 'Reskin light: no text colour is readable on that background. Pick a background further from the text.' }
-    return { text: 'Reskin light: ' + (await applyCustom($, fixed, 'Text made stronger.')).text + fullLine }
+    return { text: 'Reskin light: ' + (await applyCustom($, fixed, 'Text made stronger.')).text }
   }
   const { custom, unread } = fromText(rest, await read($, draft))
   const n = await applyCustom($, custom)
   const skipped = unread.length > 0 ? ` (I could not read: ${unread.join(' ')}. Colours look like #1e1e2e.)` : ''
-  const fixHint = n.tone === 'bad' ? ' Type /skin custom fix to strengthen the text for you.' : fullLine
+  const fixHint = n.tone === 'bad' ? ' Type /skin custom fix to strengthen the text for you.' : ''
   return { text: 'Reskin light: ' + n.text + skipped + fixHint + '\nAs one line: ' + toText(custom) }
 }
 
@@ -383,7 +359,15 @@ export const register: Register = on => {
     // after it, the command list shows whether Reskin's full flavour (or anyone) owns /skin. Taking it only
     // when free means the full flavour is never refused, whichever loads first (tested 14 Nov, report.md).
     const r = await next(e)
+    timer?.cancel()
+    timer = undefined
     const owner = (await $.command.list()).find(c => c.name === COMMAND)
+    standing = fullIsIn(await $.settings.read({ key: 'enabledPlugins' }).catch(() => undefined), owner)
+    if (standing) {
+      // Reskin full is in: leave everything to it.
+      ownsCommand = false
+      return r
+    }
     ownsCommand = owner === undefined || owner.plugin === OWN_NAME
     if (ownsCommand) {
       try {
@@ -394,8 +378,6 @@ export const register: Register = on => {
     }
     painted = undefined
     await syncOnce($, true)
-    await writeShared($)
-    timer?.cancel()
     // Always watch: the desktop app's Code tab starts its sessions as non-interactive (live round, 14 Nov:
     // a check on isInteractive left every Code tab session without the sync). A -p run ends soon anyway.
     timer = $.clock.every(SYNC_MS, () => void syncOnce($))
@@ -417,16 +399,14 @@ export const register: Register = on => {
   // first version, a side pane, squeezed the fields until the codes were cut off).
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const tab = await fullTab($)
-    const fromFull = tab.open
-    if (!fromFull && !(await read($, bandOpen))) return next(e)
+    if (standing || !(await read($, bandOpen))) return next(e)
     // Claude Code's own placeholder ({ type: 'engine' }) is never nested (as in the full flavour's band).
     const drawn = await Promise.resolve(next(e)).catch(() => null)
     const below = drawn !== null && typeof drawn === 'object' && (drawn as { type?: string }).type !== 'engine' ? drawn : null
     const { Box, Text, Input, Select, Button } = $.ui.resolve(e)
     const c = await read($, draft)
     const kept = await read($, note)
-    const n = kept !== null && (kept.stamp ?? -1) === tab.version ? kept : null
+    const n = kept
     const v = check(c)
     const half = await read($, editing)
 
@@ -452,7 +432,6 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column">
-        {/* Under whatever is drawn beneath (Reskin full's tabs), so its Custom tab sits right above these fields. */}
         {below as any}
         <Box key="colours-band" flexDirection="column" gap={1} paddingX={1}>
           <Box key="colours-top" flexDirection="row" alignItems="center">
@@ -494,29 +473,28 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: COMMAND }, async ($, e, next) => {
+    // Reskin full is on: /skin is entirely its own (it also says that the two do not work together).
+    if (standing) return next(e)
     const words = e.args.trim().split(/\s+/).filter(Boolean)
-    // /skin custom is this mod's alone: answered here, never passed on (the full flavour shows this answer).
+    // /skin custom is this mod's alone: answered here, never passed on.
     if (words[0]?.toLowerCase() === CUSTOM_WORD) {
       try {
-        return await customCommand($, e.args.trim().slice(CUSTOM_WORD.length), !ownsCommand)
+        return await customCommand($, e.args.trim().slice(CUSTOM_WORD.length))
       } catch (err) {
         return { text: 'Reskin light: something went wrong with your colours (' + String(err).slice(0, 160) + '). Nothing was changed.' }
       }
     }
-    // One of your saved skins, alone on the line: painted here. Reskin full turns its own colours off for it in either
-    // load order: above this mod it reads SAVED_START in this answer; beneath it, it finds the name in the shared file and
-    // answers, and its answer is added here.
+    // One of your saved skins, alone on the line: painted here. If another mod owns /skin, its answer is added.
     if (words.length === 1) {
       const m = await mine($)
       const own = savedName(words[0]!)
-      // Only the name as saved (any case): a spelling the full flavour would refuse ("my_blue") is never one.
+      // Only the name as saved (any case): a spelling like "my_blue" is never one.
       if (Object.hasOwn(m, own) && words[0]!.toLowerCase() === own) {
-        const mineAnswer = await useSaved($, own, m[own]!, !ownsCommand)
+        const mineAnswer = await useSaved($, own, m[own]!)
         if (ownsCommand) return mineAnswer
         const beneath = await next(e)
         if (isUnanswered(beneath) || typeof beneath?.text !== 'string') return mineAnswer
-        const kept = mineAnswer.text.split('\n').filter(l => !l.startsWith(FULL_COVERS)).join('\n')
-        return { ...beneath, text: `${kept}\n${beneath.text}` }
+        return { ...beneath, text: `${mineAnswer.text}\n${beneath.text}` }
       }
     }
     const name = commandSkin(words, !ownsCommand)
@@ -526,12 +504,12 @@ export const register: Register = on => {
       await $.store.set('skin', name)
       result = await paint($, { key: name, name })
     }
-    // 2. With the full flavour in, it answers (fonts, headers, check, its own tick). Only add one line about these colours.
+    // 2. With another mod owning /skin, it answers. Only add one line about these colours.
     if (!ownsCommand) {
       const beneath = await next(e)
       if (isUnanswered(beneath)) return ownAnswer(words, name, result, await nowName($), Object.keys(await mine($)))
       if (name === undefined) {
-        // The full flavour's list leaves out your saved skins: add them.
+        // The other mod's list leaves out your saved skins: add them.
         const yours = Object.keys(await mine($))
         const listing = words.length === 0 || (words.length === 1 && words[0]!.toLowerCase() === 'list')
         return listing && yours.length > 0 && typeof beneath?.text === 'string' && !beneath.text.includes('Your skins (Code tab')
@@ -546,11 +524,9 @@ export const register: Register = on => {
 }
 
 // The skin a /skin line asks for, or undefined. Only the plain forms count: a skin name or off, alone, with at most
-// one --tick (the full flavour lower-cases the line, so case does not matter). The full flavour's one-line commands
-// (font, type parts) and every other option change nothing here, so this mod never changes colours on a line the full
-// flavour would refuse. Its own whole-app colours cover the Code tab anyway.
-// strict (the full flavour is in): the name must also be one the full flavour takes, letters, digits and single
-// hyphens only, so a spelling it refuses ("rose_pine", "drá") never changes these colours either.
+// one --tick (case does not matter). Longer lines and every other option change nothing here.
+// strict (another mod owns /skin): the name must also be letters, digits and single hyphens only, so a spelling such
+// as "rose_pine" or "drá" never changes these colours.
 export function commandSkin(words: string[], strict = false): string | undefined {
   const low = words.map(w => w.toLowerCase())
   const flags = low.filter(w => w.startsWith('-'))

@@ -1,7 +1,7 @@
 import { expect, test, mock } from 'claude-code/testing'
 
 import { SKINS } from '../hooks/skins.js'
-import { sharedPath, SHARED_FILE } from '../hooks/register.js'
+import { fullIsIn } from '../hooks/register.js'
 import { check, contrast, definition, fromText, makeReadable, startFrom, toText } from '../hooks/custom.js'
 
 // A store in memory the test can also write, standing for another session writing the shared file.
@@ -122,15 +122,15 @@ test('custom is never a skin name, and never read as one', async ($, on) => {
   expect(String(sets[0].colors.label ?? '')).not.toMatch(/Your colours/)
 })
 
-test('with the full flavour owning /skin: /skin custom is answered here and not passed on', async ($, on) => {
+test('with another mod owning /skin: /skin custom is answered here and not passed on', async ($, on) => {
   const sets: any[] = [], clears = { n: 0 }, mem: Record<string, unknown> = { skin: 'nord' }
-  ENGINE(on, sets, clears, mem, [{ name: 'skin', plugin: 'skin' }])
+  ENGINE(on, sets, clears, mem, [{ name: 'skin', plugin: 'claude-skins' }])
   let passed = 0
   on('command.run', () => { passed++; return { text: 'full answered' } })
   mock.clock(on)
   await start($)
   const r = await run($, 'custom bg #000000 fg #ffffff accent #0a84ff')
-  expect(String(r.text)).toMatch(/Claude accepts these colours.*Reskin full's colours are on/s)
+  expect(String(r.text)).toMatch(/Claude accepts these colours/)
   expect(passed).toBe(0)
   expect(mem.skin).toBe('custom')
 })
@@ -215,10 +215,10 @@ test('a saved skin: /skin <name> puts it on, list shows it, other sessions follo
   expect(String((await run($, 'my-blue')).text)).toMatch(/no skin called "my-blue"/)
 })
 
-test('with the full flavour owning /skin: a saved skin is painted here and passed on, so full turns its colours off', async ($, on) => {
+test('with another mod owning /skin: a saved skin is painted here and its answer added', async ($, on) => {
   const sets: any[] = [], clears = { n: 0 }
   const mem: Record<string, unknown> = { skin: 'nord', mine: { 'my-blue': startFrom('kanagawa') } }
-  ENGINE(on, sets, clears, mem, [{ name: 'skin', plugin: 'skin' }])
+  ENGINE(on, sets, clears, mem, [{ name: 'skin', plugin: 'claude-skins' }])
   let passed = 0
   on('command.run', (_: unknown, e: any) => { passed++; return { text: e.args.trim() === 'list' ? 'full list' : 'full answered' } })
   mock.clock(on)
@@ -227,11 +227,11 @@ test('with the full flavour owning /skin: a saved skin is painted here and passe
   expect(String(r.text)).toBe('Reskin light: your skin "my-blue" on. Other sessions follow within about 2 seconds.\nfull answered')
   expect(passed).toBe(1)
   expect(mem.skin).toBe('my-blue')
-  // A spelling the full flavour refuses is never a saved skin here either.
+  // A spelling with an underscore is never a saved skin.
   mem.skin = 'nord'
   await run($, 'my_blue')
   expect(mem.skin).toBe('nord')
-  // The full flavour's list gets your saved skins added.
+  // The other mod's list gets your saved skins added.
   const list = await run($, 'list')
   expect(String(list.text)).toMatch(/^full list\nYour skins \(Code tab, Reskin light\): my-blue\./)
 })
@@ -279,31 +279,63 @@ test('the band draws on every surface that has it, wide and narrow', async ($, o
   }
 })
 
-test('the shared file of saved names sits next to the plugins folder, the same place Reskin full looks', () => {
-  expect(SHARED_FILE).toBe('reskin/saved-skins.json')
-  expect(sharedPath('/Users/x/.claude/plugins/cache/reskin-for-claude/reskin-light/2.3.0')).toBe('/Users/x/.claude/reskin/saved-skins.json')
-  expect(sharedPath('/Users/x/dev/reskin-light')).toBe(undefined)
+test('one flavour at a time: with Reskin full enabled, light paints nothing, answers nothing, draws nothing, clears nothing', async ($, on) => {
+  const sets: any[] = [], clears = { n: 0 }, mem: Record<string, unknown> = { skin: 'nord', mine: { 'my-blue': startFrom('kanagawa') } }
+  const owners: any[] = [{ name: 'skin', plugin: 'skin' }]
+  ENGINE(on, sets, clears, mem, owners)
+  let enabled: unknown = { 'skin@reskin-for-claude': ['2.3.1'], 'reskin-light@reskin-for-claude': true }
+  on('settings.read', () => ({ value: { enabledPlugins: enabled } }))
+  let passed = 0
+  on('command.run', () => { passed++; return { text: 'full answered' } })
+  const clock = mock.clock(on)
+  await start($)
+  expect(sets.length).toBe(0)
+  expect(clears.n).toBe(0)
+  for (const line of ['dracula', 'off', 'custom', 'my-blue', 'list']) expect(String((await run($, line)).text)).toBe('full answered')
+  expect(passed).toBe(5)
+  expect(mem.skin).toBe('nord')
+  const ui = await $.ui.mount(MOUNT())
+  expect(await ui.find({ type: 'Input', key: 'dark-bg' })).toBe(undefined)
+  await ui.unmount()
+  // No sync timer: another session's choice changes nothing here.
+  mem.skin = 'dracula'
+  await clock.advance(4000)
+  expect(sets.length).toBe(0)
+  // Reskin full turned off (and gone from /skin): the next session paints the stored choice again.
+  enabled = { 'skin@reskin-for-claude': false, 'reskin-light@reskin-for-claude': true }
+  owners.length = 0
+  await start($)
+  expect(sets.length).toBe(1)
+  expect(clears.n).toBe(0)
 })
 
-test("Reskin full's Custom tab open: the fields draw with no /skin custom, under what is beneath", async ($, on) => {
-  const sets: any[] = [], clears = { n: 0 }
-  ENGINE(on, sets, clears, { skin: 'off' })
-  let fullCustom = true, version = 1
-  on('state.get', (next: any, e: any) => (e.plugin === 'skin' && e.key === 'customOpen' ? { value: { value: fullCustom, version } } : next(e)))
+test('a colours band opened before Reskin full came in is hidden once light stands down', async ($, on) => {
+  const sets: any[] = [], clears = { n: 0 }, mem: Record<string, unknown> = { skin: 'nord' }
+  const owners: any[] = []
+  ENGINE(on, sets, clears, mem, owners)
+  let enabled: unknown = { 'reskin-light@reskin-for-claude': true }
+  on('settings.read', () => ({ value: { enabledPlugins: enabled } }))
+  on('command.run', () => ({ text: 'full answered' }))
   mock.clock(on)
   await start($)
-  const ui = await $.ui.mount(MOUNT())
-  expect((await ui.find({ type: 'Input', key: 'dark-bg' })) !== undefined).toBe(true)
-  await ui.input({ key: 'dark-bg', text: 'pink' } as any)
-  expect(await ui.find({ type: 'Text', text: /"pink" is not a colour code/ }) !== undefined).toBe(true)
-  await ui.unmount()
-  // Closed and opened again: the band opens clean, without the last opening's note.
-  version += 2
-  const again = await $.ui.mount(MOUNT())
-  expect(await again.find({ type: 'Text', text: /"pink" is not a colour code/ })).toBe(undefined)
-  await again.unmount()
-  fullCustom = false
-  const shut = await $.ui.mount(MOUNT())
-  expect(await shut.find({ type: 'Input', key: 'dark-bg' })).toBe(undefined)
-  await shut.unmount()
+  await run($, 'custom')
+  const open = await $.ui.mount(MOUNT())
+  expect((await open.find({ type: 'Input', key: 'dark-bg' })) !== undefined).toBe(true)
+  await open.unmount()
+  enabled = { 'skin@reskin-for-claude': true, 'reskin-light@reskin-for-claude': true }
+  owners.push({ name: 'skin', plugin: 'skin' })
+  await start($)
+  const hidden = await $.ui.mount(MOUNT())
+  expect(await hidden.find({ type: 'Input', key: 'dark-bg' })).toBe(undefined)
+  await hidden.unmount()
+})
+
+test('Reskin full is in when enabled (true or a version list) or when it owns /skin', () => {
+  expect(fullIsIn({ 'skin@reskin-for-claude': true }, undefined)).toBe(true)
+  expect(fullIsIn({ 'skin@some-marketplace': ['2.3.1'] }, undefined)).toBe(true)
+  expect(fullIsIn({ 'skin@reskin-for-claude': false }, undefined)).toBe(false)
+  expect(fullIsIn({ 'reskin-light@reskin-for-claude': true }, undefined)).toBe(false)
+  expect(fullIsIn(undefined, { plugin: 'skin' })).toBe(true)
+  expect(fullIsIn(undefined, { plugin: 'claude-skins' })).toBe(false)
+  expect(fullIsIn(undefined, undefined)).toBe(false)
 })

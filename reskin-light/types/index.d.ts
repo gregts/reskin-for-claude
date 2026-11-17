@@ -4,12 +4,10 @@ export type Three = { bg: string; fg: string; accent: string }
 /** Your own colours: three per mode, the skin they started from, and whether to force a mode. */
 export type Custom = { base: string; light: Three; dark: Three; scheme: 'system' | ModeName }
 /** The line under the band's fields: good news, a refusal, or a hint. */
-export type Note = { tone: 'ok' | 'bad' | 'info'; text: string; stamp?: number }
+export type Note = { tone: 'ok' | 'bad' | 'info'; text: string }
 
 declare module 'claude-code' {
   interface PluginState {
     'reskin-light': { draft: Shaped<Custom>; note: Note | null; bandOpen: boolean; editing: ModeName }
-    // Reskin full's Custom tab, read only (its own contract declares it too).
-    skin: { customOpen: boolean }
   }
 }

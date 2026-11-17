@@ -450,58 +450,13 @@ export function skinSuggestions(text: string, start: number, cursor: number, ski
   return [...starts, ...contains].slice(0, MAX_SUGGESTIONS)
 }
 
-// /skin custom (your own colours) is Reskin light's. Reskin light answers it before this mod does; its answer is shown
-// as it is. Without Reskin light (no answer, or the engine's "no hook answered"), say where the feature lives.
-export const CUSTOM_NEEDS_LIGHT = 'Your own colours come with Reskin light, from the same marketplace: claude plugin install reskin-light@reskin-for-claude, then open a new Code tab session and type /skin custom.'
-export function customAnswer(light: unknown): string {
-  const t = (light as { text?: unknown } | null | undefined)?.text
-  return typeof t === 'string' && t.trim() !== '' && !/no command\.run hook answered/.test(t) ? t : CUSTOM_NEEDS_LIGHT
-}
-
-// Reskin light (2.3.0) answers /skin <one of your saved skins> itself, starting with LIGHT_SAVED_START. This mod then
-// turns its own colours off (they cover the Code tab), so the saved skin shows, and drops light's line asking the person
-// to do that by hand. Undefined: not a saved-skin answer.
-export const LIGHT_SAVED_START = 'Reskin light: your skin "'
-export function savedFromLight(light: unknown): string | undefined {
-  const t = (light as { text?: unknown } | null | undefined)?.text
-  if (typeof t !== 'string' || !t.startsWith(LIGHT_SAVED_START)) return undefined
-  return t.split('\n').filter(l => !l.startsWith("If Reskin full's colours are on")).join('\n')
-}
-
-// Your saved skins (Reskin light, 2.3.0) in this mod's Skins menu. Reskin light writes their names to one small file
-// next to the plugins folder: <Claude's config folder>/reskin/saved-skins.json, { "names": [...] }. A saved skin's menu
-// value is MINE_PREFIX + name; Apply on it runs /skin <name>, which Reskin light answers (and this mod then turns its own
-// colours off). No file: Reskin light is not installed, so no saved skins and no Custom button.
-export const MINE_PREFIX = 'mine:'
-export const SHARED_FILE = 'reskin/saved-skins.json'
-export function sharedPath(root: string): string | undefined {
-  const i = root.indexOf('/plugins/cache/')
-  return i > 0 ? `${root.slice(0, i)}/${SHARED_FILE}` : undefined
-}
-const SAVED_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
-// Never a saved name, whatever the file says: every /skin word of both flavours, and the starting points. Skins and
-// their short names are refused too (taken, and skinAlias), so a saved name can only ever mean that saved skin.
-export const SAVED_RESERVED: ReadonlySet<string> = new Set([...VERBS, 'font', 'fonts', 'type', 'band', 'custom', 'on', 'tick', 'forget', 'delete', 'help', 'save', 'mine', 'claude', 'soft-grey'])
-export const savedNameOk = (n: unknown, taken: (n: string) => boolean = () => false): n is string =>
-  typeof n === 'string' && SAVED_NAME.test(n) && n.length <= 24 && !SAVED_RESERVED.has(n) && skinAlias(n) === n && !taken(n)
-export function savedNamesOf(text: string, taken: (n: string) => boolean = () => false): string[] {
-  try {
-    const v = JSON.parse(text) as { names?: unknown }
-    return Array.isArray(v?.names) ? v.names.filter((n): n is string => savedNameOk(n, taken)) : []
-  } catch {
-    return []
-  }
-}
-export function savedOf(value: string, taken: (n: string) => boolean = () => false): string | undefined {
-  if (!value.startsWith(MINE_PREFIX)) return undefined
-  const n = value.slice(MINE_PREFIX.length)
-  return savedNameOk(n, taken) ? n : undefined
-}
-// Whether Reskin light is enabled, from Claude's merged enabledPlugins setting (its shared file alone outlives it).
+// One flavour at a time (2.3.1, the owner, 17 Nov): Reskin full and Reskin light never run together. With both enabled
+// this mod still works and says so on every /skin answer and in the band; Reskin light stands down by itself.
+export const BOTH_ON = 'Reskin light is also turned on. Reskin full and Reskin light do not work together, so Reskin light stays quiet while Reskin full is on. To tidy up: run claude plugin disable reskin-light@reskin-for-claude in Terminal, then quit Claude (Cmd+Q) and open it again.'
+// Your own colours are a Reskin light feature only.
+export const CUSTOM_LIGHT_ONLY = 'Custom skins (your own colours) are part of Reskin light only. Reskin full and Reskin light do not work together: to make your own skins, use Reskin light instead of Reskin full (README, "Pick one").'
+// Whether Reskin light is enabled, from Claude's merged enabledPlugins setting: true, or a version list (Claude counts
+// both as enabled).
 export function lightEnabled(enabled: unknown): boolean {
-  return enabled !== null && typeof enabled === 'object' && Object.entries(enabled as Record<string, unknown>).some(([k, v]) => k.startsWith('reskin-light@') && v === true)
-}
-export const withSaved = (options: { value: string; label: string }[], saved: readonly string[]) => {
-  const off = options.filter(o => o.value === 'off')
-  return [...options.filter(o => o.value !== 'off'), ...saved.map(n => ({ value: MINE_PREFIX + n, label: `${n} (yours)` })), ...off]
+  return enabled !== null && typeof enabled === 'object' && Object.entries(enabled as Record<string, unknown>).some(([k, v]) => k.startsWith('reskin-light@') && (v === true || Array.isArray(v)))
 }
